@@ -5,6 +5,7 @@ Automatically generates and publishes engaging movie posts to Instagram daily vi
 
 import os
 import json
+import time
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -76,6 +77,10 @@ POSTED_MOVIES_FILE = Path("posted_movies.json")
 
 # Temporary directory for images
 TEMP_DIR = Path("/tmp" if os.name != "nt" else os.getenv("TEMP", "./temp"))
+
+# Directory (inside the repo) where generated cards are stored so they can be
+# served publicly via raw.githubusercontent.com for Instagram to fetch.
+CARDS_DIR = Path("cards")
 
 
 # ============================================================================
@@ -435,9 +440,10 @@ def create_card(movie, streaming_platforms):
         draw.text((handle_x + 1, handle_y + 1), PAGE_HANDLE, fill=(0, 0, 0, 100), font=handle_font)
         draw.text((handle_x, handle_y), PAGE_HANDLE, fill=(200, 200, 200), font=handle_font)
 
-        # Save the card locally
-        TEMP_DIR.mkdir(exist_ok=True)
-        card_filename = TEMP_DIR / f"card_{movie['id']}.jpg"
+        # Save the card inside the repo's cards/ directory so it can be committed
+        # and served publicly (Instagram needs a public HTTPS image URL).
+        CARDS_DIR.mkdir(exist_ok=True)
+        card_filename = CARDS_DIR / f"card_{movie['id']}.jpg"
         card.save(card_filename, "JPEG", quality=95)
         
         log_message(f"Visual card created and saved: {card_filename}")
@@ -454,6 +460,57 @@ def create_card(movie, streaming_platforms):
 # ============================================================================
 # STEP 5: PUBLISH TO INSTAGRAM
 # ============================================================================
+
+def upload_card_to_github(card_path):
+    """
+    Commit and push the generated card image to the GitHub repository so it can be
+    served publicly via raw.githubusercontent.com. Instagram's Graph API requires a
+    publicly accessible HTTPS image URL (it cannot read local files).
+    Returns: str public raw URL to the image, or None if it cannot be hosted.
+    """
+    try:
+        # Determine the repo "owner/name" (set automatically in GitHub Actions)
+        repo = os.getenv("GITHUB_REPOSITORY")
+        if not repo:
+            # Fall back to parsing the git remote URL locally
+            try:
+                import subprocess
+                remote = subprocess.check_output(
+                    ["git", "config", "--get", "remote.origin.url"],
+                    text=True,
+                ).strip()
+                # Normalize git@github.com:owner/repo.git or https://github.com/owner/repo.git
+                remote = remote.replace("git@github.com:", "").replace(
+                    "https://github.com/", ""
+                )
+                repo = remote[:-4] if remote.endswith(".git") else remote
+            except Exception:
+                repo = None
+
+        if not repo:
+            log_message("Could not determine GitHub repository - cannot host image", level="ERROR")
+            return None
+
+        # Determine current branch (default to main)
+        branch = os.getenv("GITHUB_REF_NAME", "main")
+
+        log_message(f"Pushing card image to GitHub ({repo}@{branch}) for public hosting...")
+
+        os.system(f'git add "{card_path}"')
+        os.system('git commit -m "Auto: Add daily movie card image" || echo "nothing to commit"')
+        push_result = os.system("git push")
+        if push_result != 0:
+            log_message("git push for card image returned non-zero status", level="WARNING")
+
+        # Build the public raw URL
+        public_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{card_path}".replace("\\", "/")
+        log_message(f"Card image hosted at: {public_url}")
+        return public_url
+
+    except Exception as e:
+        log_message(f"Error hosting card image on GitHub: {str(e)}", level="ERROR")
+        return None
+
 
 def publish_to_instagram(image_url, caption):
     """
@@ -506,6 +563,10 @@ def publish_to_instagram(image_url, caption):
 
     except requests.RequestException as e:
         log_message(f"Instagram Graph API error: {str(e)}", level="ERROR")
+        # Surface the actual API response body to aid debugging
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            log_message(f"Instagram API response: {resp.text}", level="ERROR")
         raise
     except Exception as e:
         log_message(f"Unexpected error publishing to Instagram: {str(e)}", level="ERROR")
@@ -585,8 +646,18 @@ def main():
             log_message("Could not generate image. Exiting.", level="ERROR")
             return
 
+        # Step 4b: Host the card publicly (Instagram requires a public HTTPS URL)
+        public_image_url = upload_card_to_github(image_url)
+        if not public_image_url:
+            log_message("Could not host image publicly. Exiting.", level="ERROR")
+            return
+
+        # Give raw.githubusercontent.com a moment to serve the freshly pushed image
+        log_message("Waiting for image to propagate on GitHub CDN...")
+        time.sleep(10)
+
         # Step 5: Publish to Instagram
-        post_id = publish_to_instagram(image_url, caption)
+        post_id = publish_to_instagram(public_image_url, caption)
 
         # Step 6: Save to history
         save_history(movie_id)
