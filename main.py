@@ -31,7 +31,7 @@ GH_TOKEN = os.getenv("GH_TOKEN")
 
 # API Base URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-INSTAGRAM_GRAPH_BASE_URL = "https://graph.instagram.com/v18.0"
+INSTAGRAM_GRAPH_BASE_URL = "https://graph.facebook.com/v18.0"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
 # Image card settings
