@@ -304,7 +304,7 @@ Format your response EXACTLY like this:
 IMPORTANT: Only output the caption, nothing else. No explanations, no notes."""
 
         message = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.3-70b-versatile",
             max_tokens=2000,
             messages=[
                 {"role": "user", "content": prompt}
