@@ -232,7 +232,11 @@ def write_caption(movie, streaming_platforms):
     try:
         log_message("Generating caption with Groq API...")
 
-        client = Groq(api_key=GROQ_API_KEY)
+        # Initialize Groq client with explicit parameters
+        client = Groq(
+            api_key=GROQ_API_KEY,
+            timeout=30.0
+        )
 
         # Format streaming info for the prompt (generic, no country labels)
         # Combine platforms from both regions and deduplicate
