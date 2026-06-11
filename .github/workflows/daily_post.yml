@@ -7,6 +7,10 @@ on:
   # Allow manual trigger from Actions tab for testing
   workflow_dispatch:
 
+# Grant the workflow's GITHUB_TOKEN write access so it can push commits
+permissions:
+  contents: write
+
 jobs:
   post_movie:
     runs-on: ubuntu-latest
@@ -17,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       # Step 2: Set up Python 3.11
       - name: Set up Python
