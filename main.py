@@ -303,7 +303,7 @@ Format your response EXACTLY like this:
 
 IMPORTANT: Only output the caption, nothing else. No explanations, no notes."""
 
-        message = client.messages.create(
+        message = client.chat.completions.create(
             model="llama3-8b-8192",
             max_tokens=2000,
             messages=[
@@ -311,7 +311,7 @@ IMPORTANT: Only output the caption, nothing else. No explanations, no notes."""
             ]
         )
 
-        caption = message.content[0].text.strip()
+        caption = message.choices[0].message.content.strip()
         log_message(f"Caption generated successfully ({len(caption)} characters)")
         return caption
 
