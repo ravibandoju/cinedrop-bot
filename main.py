@@ -49,37 +49,32 @@ PAGE_HANDLE = "@cinedrop"
 CARD_WIDTH = 1080
 CARD_HEIGHT = 1350
 
-# Genre mapping by day of week (0=Monday, 6=Sunday)
+# Genre mapping by day of week (0=Monday, 6=Sunday) — India-friendly selection
 GENRE_BY_DAY = {
     0: {"name": "Thriller", "id": 53},
-    1: {"name": "Comedy", "id": 35},
-    2: {"name": "Horror", "id": 27},
+    1: {"name": "Family", "id": 10751},
+    2: {"name": "Action", "id": 28},
     3: {"name": "Drama", "id": 18},
-    4: {"name": "Action", "id": 28},
-    5: {"name": "Science Fiction", "id": 878},
-    6: {"name": "Romance", "id": 10749},
+    4: {"name": "Comedy", "id": 35},
+    5: {"name": "Romance", "id": 10749},
+    6: {"name": "Science Fiction", "id": 878},
 }
 
-# Streaming platform mappings
-# TMDb uses provider IDs, we map them to readable names
+# Streaming platform mappings (corrected TMDb provider IDs)
 PROVIDER_MAPPING = {
-    # Common providers across both regions
     8: "Netflix",
     119: "Amazon Prime Video",
     35: "Apple TV+",
-    # India-specific
-    1685: "Disney+ Hotstar",
-    386: "Zee5",
-    1476: "SonyLIV",
-    1820: "JioCinema",
+    122: "Disney+ Hotstar",
+    232: "Zee5",
+    237: "SonyLIV",
+    892: "JioCinema",
     190: "Mubi",
-    # US-specific
     15: "Hulu",
-    384: "HBO Max",
-    386: "Peacock",
-    38: "Paramount+",
-    7: "Disney+",
-    1852: "Mubi",
+    384: "Max",
+    387: "Peacock",
+    531: "Paramount+",
+    337: "Disney+",
 }
 
 # Path to history file
@@ -187,42 +182,80 @@ def log_message(message, level="INFO"):
 def get_movie():
     """
     Fetch a random high-quality movie from TMDb API.
-    Filters by minimum rating 7.0+, excludes already-posted movies, uses today's genre.
-    Returns: dict with movie data (id, title, overview, poster_path, vote_average, release_date, genres)
+    Queries both Hollywood (English) and Indian language films, merges results,
+    filters by minimum rating 7.0+, excludes already-posted movies, uses today's genre.
+    Returns: dict with movie data (id, title, overview, poster_path, vote_average, 
+             release_date, genres, original_language)
     """
     if not TMDB_API_KEY:
         raise ValueError("TMDB_API_KEY not found in environment variables")
 
     try:
-        log_message("Fetching movie from TMDb API...")
+        import random
+        log_message("Fetching movie from TMDb API (Hollywood + Indian languages)...")
 
         posted_ids = get_posted_ids()
         today_genre = get_today_genre()
         
-        # Discover endpoint: get popular, high-rated movies of today's genre
+        # API Call 1: Hollywood (English) movies
         url = f"{TMDB_BASE_URL}/discover/movie"
-        params = {
+        params_hollywood = {
             "api_key": TMDB_API_KEY,
             "with_genres": today_genre["id"],
             "vote_average.gte": 7.0,
             "sort_by": "popularity.desc",
             "include_adult": False,
             "language": "en-US",
+            "with_original_language": "en",
             "page": 1,
         }
 
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        response_hollywood = requests.get(url, params=params_hollywood, timeout=10)
+        response_hollywood.raise_for_status()
+        hollywood_data = response_hollywood.json()
+        hollywood_movies = hollywood_data.get("results", [])
+        log_message(f"Found {len(hollywood_movies)} Hollywood films in {today_genre['name']}")
 
-        if not data.get("results"):
+        # API Call 2: Indian language movies (Hindi, Tamil, Telugu, Malayalam, Kannada)
+        params_indian = {
+            "api_key": TMDB_API_KEY,
+            "with_genres": today_genre["id"],
+            "vote_average.gte": 7.0,
+            "sort_by": "popularity.desc",
+            "include_adult": False,
+            "language": "en-US",
+            "with_original_language": "hi|ta|te|ml|kn",
+            "region": "IN",
+            "page": 1,
+        }
+
+        response_indian = requests.get(url, params=params_indian, timeout=10)
+        response_indian.raise_for_status()
+        indian_data = response_indian.json()
+        indian_movies = indian_data.get("results", [])
+        log_message(f"Found {len(indian_movies)} Indian language films in {today_genre['name']}")
+
+        # Merge both lists and deduplicate by movie ID
+        all_movies = hollywood_movies + indian_movies
+        seen_ids = set()
+        unique_movies = []
+        for m in all_movies:
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                unique_movies.append(m)
+
+        log_message(f"Merged pool: {len(unique_movies)} unique films")
+
+        if not unique_movies:
             log_message(f"No movies found for {today_genre['name']}", level="WARNING")
             return None
 
+        # Shuffle to add variety
+        random.shuffle(unique_movies)
+
         # Filter out already-posted movies and pick the first available
-        movies = data["results"]
         movie = None
-        for m in movies:
+        for m in unique_movies:
             if m["id"] not in posted_ids:
                 movie = m
                 break
@@ -231,7 +264,16 @@ def get_movie():
             log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
             return None
 
-        log_message(f"Selected movie: '{movie['title']}' (ID: {movie['id']}) - Rating: {movie['vote_average']}/10")
+        lang = movie.get("original_language", "en")
+        lang_label = {
+            "hi": "Bollywood",
+            "ta": "Tamil",
+            "te": "Telugu",
+            "ml": "Malayalam",
+            "kn": "Kannada",
+        }.get(lang, "Hollywood")
+
+        log_message(f"Selected movie: '{movie['title']}' (ID: {movie['id']}) - {lang_label} - Rating: {movie['vote_average']}/10")
         return movie
 
     except requests.RequestException as e:
@@ -300,8 +342,8 @@ def get_streaming_platforms(movie_id):
 
 def write_caption(movie, streaming_platforms):
     """
-    Use Groq API (free tier, llama3-8b-8192 model) to generate an engaging Instagram caption.
-    Caption includes: hook line, movie info, why to watch, streaming availability, engagement question, hashtags.
+    Use Groq API (llama-3.3-70b-versatile model) to generate an India-focused Instagram caption.
+    Detects film language (Bollywood/Regional/Hollywood) and tailors tone accordingly.
     Returns: str with the complete caption
     """
     if not GROQ_API_KEY:
@@ -310,13 +352,29 @@ def write_caption(movie, streaming_platforms):
     try:
         log_message("Generating caption with Groq API...")
 
-        # Initialize Groq client - simple initialization without extra parameters
+        # Initialize Groq client
         client = Groq(api_key=GROQ_API_KEY)
 
-        # Format streaming info for the prompt (generic, no country labels)
-        # Combine platforms from both regions and deduplicate
-        all_platforms = sorted(list(set(streaming_platforms["IN"] + streaming_platforms["US"])))
-        platforms_text = ", ".join(all_platforms) if all_platforms else "Not streaming — rental/purchase only 🎬"
+        # Detect film language and create appropriate label
+        original_language = movie.get("original_language", "en")
+        language_label = {
+            "hi": "Bollywood",
+            "ta": "Tamil",
+            "te": "Telugu",
+            "ml": "Malayalam",
+            "kn": "Kannada",
+        }.get(original_language, "Hollywood")
+
+        # Format streaming info: India-first display with flags
+        india_platforms = streaming_platforms.get("IN", [])
+        us_only_platforms = [p for p in streaming_platforms.get("US", []) if p not in india_platforms]
+
+        if india_platforms:
+            platforms_text = f"🇮🇳 {' · '.join(india_platforms)}"
+            if us_only_platforms:
+                platforms_text += f"\n🇺🇸 {' · '.join(us_only_platforms)}"
+        else:
+            platforms_text = "Not streaming — rental/purchase only 🎬"
 
         movie_title = movie.get("title", "Unknown")
         release_date = movie.get("release_date", "")
@@ -326,60 +384,55 @@ def write_caption(movie, streaming_platforms):
         genres = movie.get("genres", [])
         genre_str = ", ".join([g["name"] for g in genres]) if genres else "Drama"
 
-        prompt = f"""Write the FUNNIEST, most engaging Instagram caption for this movie that'll make people stop scrolling and actually WANT to watch it.
+        log_message(f"Detected film language: {language_label}")
+
+        prompt = f"""You are a witty, culturally-aware Indian movie curator writing for an Instagram page called @cinedrop.
+Your audience is Indian (18-35), bilingual (Hindi/English), loves both Bollywood and Hollywood,
+and discovers movies on Instagram reels and posts.
 
 Movie Details:
 - Title: {movie_title}
 - Year: {year}
 - Rating: {rating}/10
+- Language: {language_label}
 - Genres: {genre_str}
 - Overview: {overview}
 
 Streaming Availability:
-- Platforms: {platforms_text}
-
-🎯 TONE & VIBES (CRITICAL):
-- Write like you're texting a close friend who has impeccable taste in movies
-- Be FUNNY, witty, use humor/sarcasm naturally (don't be cringey)
-- Sound REAL, not like a bot - use relatable language
-- Create FOMO - make them feel like they're seriously missing out
-- Use casual phrases: "if you love...", "trust me on this...", "this one HIT different"
-- Be confident in recommending it, like you just watched it and had to tell someone
-- Conversational AF - like a genuine recommendation from a friend
-
-📋 STRUCTURE:
-1. HOOK: Super witty, funny, or curiosity-driven opening line (make it memorable!)
-2. WHY WATCH: 2-3 casual sentences explaining why this film slaps (NO spoilers ever)
-3. MOVIE INFO: Title, year, rating, genre (with emojis for flavor)
-4. PLATFORMS: List where to watch (clean and simple, no flags)
-5. ENGAGEMENT: Funny/spicy question, debate, or challenge to get comments
-6. HASHTAGS: 10-15 relevant tags (avoid 1M+ post tags)
-7. OVERALL: Under 2200 characters, punchy, readable, shareable
-
-✨ BONUS TOUCHES:
-- Use relevant emojis naturally (not overdone)
-- If it's a comedy - be FUNNY
-- If it's a thriller - build suspense/mystery
-- If it's drama - be emotionally compelling
-- Mix in pop culture references if they fit
-- Make the engagement question fun, not forced
-
-Format your response EXACTLY like this:
-[Super witty/funny hook line]
-
-🎬 [Movie Title] ([Year])
-⭐ [Rating]/10 · [Genre]
-
-[2-3 casual, conversational sentences - why this film is incredible]
-
-📺 Where to watch:
 {platforms_text}
 
-[Funny/spicy/engaging question to drive comments]
+🎯 TONE & STYLE (NON-NEGOTIABLE):
+- Write like a cool Indian friend with great taste — not a bot
+- If the film is Indian (Bollywood/Tamil/Telugu/Malayalam/Kannada), CELEBRATE it with desi pride
+- If Hollywood, frame it specifically for what Indian audiences will love about it
+- Use Hinglish naturally where it fits: "yaar", "bilkul solid", "ekdum", "bhai", "yaad rakh"
+- Reference Indian culture naturally: chai-movie nights, weekend binge, family drama vibes, "log bolte hain..."
+- Be FUNNY, real, and conversational — no cringe, no corporate tone
+- Create FOMO — make them feel they are seriously missing out
+- Match the genre energy: thriller = suspense, comedy = funny, romance = emotional, action = hype
 
-[Hashtags]
+📋 CAPTION STRUCTURE (follow exactly):
 
-IMPORTANT: Only output the caption, nothing else. No explanations, no notes."""
+[One killer hook line — funny, mysterious, or emotional depending on genre]
+
+🎬 [Movie Title] ([Year])
+⭐ [Rating]/10 · [Genre] · [Language: Bollywood / Tamil / Telugu / Hollywood etc.]
+
+[2-3 casual sentences on why this film is incredible — no spoilers, desi lens]
+
+📺 Kahan dekhein:
+{platforms_text}
+
+[Spicy question or debate to drive comments — make it fun and India-relevant]
+
+[10-15 hashtags — mix of English and Hindi tags, avoid tags with 1M+ posts]
+
+RULES:
+- Total caption under 2200 characters
+- Only output the caption, nothing else
+- No explanations, no markdown, no extra notes
+- Hashtags on the last line only
+"""
 
         message = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -464,11 +517,22 @@ def create_card(movie, streaming_platforms):
                 subtitle_font = ImageFont.load_default()
                 handle_font = ImageFont.load_default()
 
-        # Add genre badge in top-left corner (vibrant purple/magenta)
+        # Detect film language and set badge color accordingly
+        original_language = movie.get("original_language", "en")
+        if original_language in ["hi", "ta", "te", "ml", "kn"]:
+            badge_color = (255, 103, 0)    # Saffron orange — Indian films
+            is_indian_film = True
+        else:
+            badge_color = (186, 85, 211)   # Purple — Hollywood
+            is_indian_film = False
+
+        log_message(f"Badge color: {'Saffron (Indian film)' if is_indian_film else 'Purple (Hollywood)'}")
+
+        # Add genre badge in top-left corner
         genres = movie.get("genres", [])
         genre_text = genres[0]["name"] if genres else "Drama"
         
-        # Create badge background with vibrant color
+        # Create badge background with appropriate color
         badge_padding = 10
         badge_bbox = draw.textbbox((20, 20), genre_text, font=subtitle_font)
         badge_width = badge_bbox[2] - badge_bbox[0] + 2 * badge_padding
@@ -476,9 +540,20 @@ def create_card(movie, streaming_platforms):
         
         draw.rectangle(
             [(15, 15), (15 + badge_width, 15 + badge_height)],
-            fill=(186, 85, 211),  # Medium orchid - vibrant purple
+            fill=badge_color,
         )
         draw.text((15 + badge_padding, 20), genre_text, fill=(255, 255, 255), font=subtitle_font)
+
+        # Add language label below the genre badge
+        language_label = {
+            "hi": "🇮🇳 Bollywood",
+            "ta": "🇮🇳 Tamil",
+            "te": "🇮🇳 Telugu",
+            "ml": "🇮🇳 Malayalam",
+            "kn": "🇮🇳 Kannada",
+        }.get(original_language, "🎬 Hollywood")
+
+        draw.text((15 + badge_padding, 20 + badge_height + 5), language_label, fill=(255, 255, 255), font=handle_font)
 
         # Add movie title at the bottom with glow effect
         movie_title = movie.get("title", "Unknown")
@@ -756,12 +831,23 @@ def main():
         # Step 6: Save to history (and clean up the card image)
         save_history(movie, card_path=image_url)
 
+        # Determine film language/type for summary
+        original_language = movie.get("original_language", "en")
+        language_label = {
+            "hi": "Bollywood",
+            "ta": "Tamil",
+            "te": "Telugu",
+            "ml": "Malayalam",
+            "kn": "Kannada",
+        }.get(original_language, "Hollywood")
+
         # Success summary
         log_message("=" * 80)
         log_message("SUCCESS SUMMARY")
         log_message("=" * 80)
         log_message(f"Movie Title: {movie_title}")
         log_message(f"Movie ID: {movie_id}")
+        log_message(f"Film Type: {language_label}")
         log_message(f"India Platforms: {', '.join(streaming_platforms['IN']) or 'Not streaming'}")
         log_message(f"US Platforms: {', '.join(streaming_platforms['US']) or 'Not streaming'}")
         log_message(f"Instagram Post ID: {post_id}")

@@ -1,9 +1,9 @@
 name: Daily Instagram Movie Post
 
-# Trigger: Run at 9:00 AM UTC every day
+# Trigger: Run at 3:00 PM UTC every day (8:30 PM IST — peak Indian Instagram engagement time)
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '0 15 * * *'
   # Allow manual trigger from Actions tab for testing
   workflow_dispatch:
 
