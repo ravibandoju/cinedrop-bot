@@ -181,9 +181,12 @@ def log_message(message, level="INFO"):
 
 def get_movie():
     """
-    Fetch a random high-quality movie from TMDb API.
-    Queries both Hollywood (English) and Indian language films, merges results,
-    filters by minimum rating 7.0+, excludes already-posted movies, uses today's genre.
+    Fetch high-quality movies spanning multiple eras (classics to recent releases).
+    Queries both Hollywood (English) and Indian language films across three time periods:
+    - Golden classics (1950–1994): ranked by vote_average.desc
+    - Modern classics (1995–2015): ranked by popularity.desc
+    - Recent (2016–present): ranked by popularity.desc
+    Merges all results, deduplicates by ID, excludes already-posted movies, uses today's genre.
     Returns: dict with movie data (id, title, overview, poster_path, vote_average, 
              release_date, genres, original_language)
     """
@@ -192,51 +195,94 @@ def get_movie():
 
     try:
         import random
-        log_message("Fetching movie from TMDb API (Hollywood + Indian languages)...")
+        log_message("Fetching movies from TMDb API across eras (classics to recent)...")
 
         posted_ids = get_posted_ids()
         today_genre = get_today_genre()
         
-        # API Call 1: Hollywood (English) movies
+        # Define era filters: date ranges and vote count thresholds
+        ERA_FILTERS = [
+            {
+                "name": "Golden Classics (1950–1994)",
+                "primary_release_date.gte": "1950-01-01",
+                "primary_release_date.lte": "1994-12-31",
+                "vote_count.gte": 500,
+                "sort_by": "vote_average.desc",  # Rank classics by quality, not popularity
+            },
+            {
+                "name": "Modern Classics (1995–2015)",
+                "primary_release_date.gte": "1995-01-01",
+                "primary_release_date.lte": "2015-12-31",
+                "vote_count.gte": 300,
+                "sort_by": "popularity.desc",
+            },
+            {
+                "name": "Recent (2016–present)",
+                "primary_release_date.gte": "2016-01-01",
+                "vote_count.gte": 100,
+                "sort_by": "popularity.desc",
+            },
+        ]
+
+        all_movies = []
         url = f"{TMDB_BASE_URL}/discover/movie"
-        params_hollywood = {
-            "api_key": TMDB_API_KEY,
-            "with_genres": today_genre["id"],
-            "vote_average.gte": 7.0,
-            "sort_by": "popularity.desc",
-            "include_adult": False,
-            "language": "en-US",
-            "with_original_language": "en",
-            "page": 1,
-        }
 
-        response_hollywood = requests.get(url, params=params_hollywood, timeout=10)
-        response_hollywood.raise_for_status()
-        hollywood_data = response_hollywood.json()
-        hollywood_movies = hollywood_data.get("results", [])
-        log_message(f"Found {len(hollywood_movies)} Hollywood films in {today_genre['name']}")
+        # Make 6 API calls: 3 eras × 2 language groups (English + Indian)
+        for era in ERA_FILTERS:
+            era_name = era["name"]
+            
+            # Call 1: English films in this era
+            params_english = {
+                "api_key": TMDB_API_KEY,
+                "with_genres": today_genre["id"],
+                "vote_average.gte": 7.0,
+                "include_adult": False,
+                "language": "en-US",
+                "with_original_language": "en",
+                "primary_release_date.gte": era["primary_release_date.gte"],
+                "vote_count.gte": era["vote_count.gte"],
+                "sort_by": era["sort_by"],
+                "page": 1,
+            }
+            if "primary_release_date.lte" in era:
+                params_english["primary_release_date.lte"] = era["primary_release_date.lte"]
 
-        # API Call 2: Indian language movies (Hindi, Tamil, Telugu, Malayalam, Kannada)
-        params_indian = {
-            "api_key": TMDB_API_KEY,
-            "with_genres": today_genre["id"],
-            "vote_average.gte": 7.0,
-            "sort_by": "popularity.desc",
-            "include_adult": False,
-            "language": "en-US",
-            "with_original_language": "hi|ta|te|ml|kn",
-            "region": "IN",
-            "page": 1,
-        }
+            try:
+                response_english = requests.get(url, params=params_english, timeout=10)
+                response_english.raise_for_status()
+                english_movies = response_english.json().get("results", [])
+                log_message(f"  {era_name}: Found {len(english_movies)} English films")
+                all_movies.extend(english_movies)
+            except Exception as e:
+                log_message(f"  {era_name} (English): {str(e)}", level="WARNING")
 
-        response_indian = requests.get(url, params=params_indian, timeout=10)
-        response_indian.raise_for_status()
-        indian_data = response_indian.json()
-        indian_movies = indian_data.get("results", [])
-        log_message(f"Found {len(indian_movies)} Indian language films in {today_genre['name']}")
+            # Call 2: Indian language films in this era
+            params_indian = {
+                "api_key": TMDB_API_KEY,
+                "with_genres": today_genre["id"],
+                "vote_average.gte": 7.0,
+                "include_adult": False,
+                "language": "en-US",
+                "with_original_language": "hi|ta|te|ml|kn",
+                "region": "IN",
+                "primary_release_date.gte": era["primary_release_date.gte"],
+                "vote_count.gte": era["vote_count.gte"],
+                "sort_by": era["sort_by"],
+                "page": 1,
+            }
+            if "primary_release_date.lte" in era:
+                params_indian["primary_release_date.lte"] = era["primary_release_date.lte"]
 
-        # Merge both lists and deduplicate by movie ID
-        all_movies = hollywood_movies + indian_movies
+            try:
+                response_indian = requests.get(url, params=params_indian, timeout=10)
+                response_indian.raise_for_status()
+                indian_movies = response_indian.json().get("results", [])
+                log_message(f"  {era_name}: Found {len(indian_movies)} Indian language films")
+                all_movies.extend(indian_movies)
+            except Exception as e:
+                log_message(f"  {era_name} (Indian): {str(e)}", level="WARNING")
+
+        # Deduplicate by movie ID
         seen_ids = set()
         unique_movies = []
         for m in all_movies:
@@ -244,13 +290,13 @@ def get_movie():
                 seen_ids.add(m["id"])
                 unique_movies.append(m)
 
-        log_message(f"Merged pool: {len(unique_movies)} unique films")
+        log_message(f"Total merged pool: {len(unique_movies)} unique films from all eras")
 
         if not unique_movies:
             log_message(f"No movies found for {today_genre['name']}", level="WARNING")
             return None
 
-        # Shuffle to add variety
+        # Shuffle to add variety across eras
         random.shuffle(unique_movies)
 
         # Filter out already-posted movies and pick the first available
@@ -273,7 +319,16 @@ def get_movie():
             "kn": "Kannada",
         }.get(lang, "Hollywood")
 
-        log_message(f"Selected movie: '{movie['title']}' (ID: {movie['id']}) - {lang_label} - Rating: {movie['vote_average']}/10")
+        # Determine which era this film belongs to
+        year = int(movie.get("release_date", "2020")[:4]) if movie.get("release_date") else 2020
+        if year < 1995:
+            era_label = "Golden Classic"
+        elif year < 2016:
+            era_label = "Modern Classic"
+        else:
+            era_label = "Recent"
+
+        log_message(f"Selected movie: '{movie['title']}' ({year}) - {lang_label} {era_label} - Rating: {movie['vote_average']}/10")
         return movie
 
     except requests.RequestException as e:
@@ -384,7 +439,34 @@ def write_caption(movie, streaming_platforms):
         genres = movie.get("genres", [])
         genre_str = ", ".join([g["name"] for g in genres]) if genres else "Drama"
 
-        log_message(f"Detected film language: {language_label}")
+        # Determine film era for tone guidance
+        try:
+            year_int = int(year)
+            if year_int < 1995:
+                era_label = "Golden Classic"
+                era_tone = """
+- If the film is from before 1995, open with something like "Yeh toh classic hai yaar 🎞️" or "Before Netflix, before OTT — this one defined cinema"
+- Make classics feel like a discovery, not old news
+- Frame the timelessness: "Decades old par abhi bhi relevant" or "Yeh film aaj ke generation ko dekhna chahiye"
+- NEVER make an old film sound dated or boring — sell the cinematic brilliance and legacy"""
+            elif year_int < 2016:
+                era_label = "Modern Classic"
+                era_tone = """
+- If the film is between 1995–2015, frame it as a hidden gem or underrated masterpiece people may have missed
+- "Sab ko nahi pata par ye film masterpiece hai" — discovery angle
+- Emphasize why it's been overlooked and why NOW is the time to watch
+- Make it feel like you're introducing them to something special and timeless"""
+            else:
+                era_label = "Recent Release"
+                era_tone = """
+- If recent (2016–present), create urgency and FOMO
+- "Fresh, relevant, and everyone's talking about it" — emphasize timeliness
+- New films deserve hype and momentum"""
+        except:
+            era_label = "Film"
+            era_tone = ""
+
+        log_message(f"Detected film language: {language_label} | Era: {era_label}")
 
         prompt = f"""You are a witty, culturally-aware Indian movie curator writing for an Instagram page called @cinedrop.
 Your audience is Indian (18-35), bilingual (Hindi/English), loves both Bollywood and Hollywood,
@@ -395,6 +477,7 @@ Movie Details:
 - Year: {year}
 - Rating: {rating}/10
 - Language: {language_label}
+- Era: {era_label}
 - Genres: {genre_str}
 - Overview: {overview}
 
@@ -408,8 +491,9 @@ Streaming Availability:
 - Use Hinglish naturally where it fits: "yaar", "bilkul solid", "ekdum", "bhai", "yaad rakh"
 - Reference Indian culture naturally: chai-movie nights, weekend binge, family drama vibes, "log bolte hain..."
 - Be FUNNY, real, and conversational — no cringe, no corporate tone
-- Create FOMO — make them feel they are seriously missing out
 - Match the genre energy: thriller = suspense, comedy = funny, romance = emotional, action = hype
+- NEVER make an old film sound dated or boring — sell the timelessness
+{era_tone}
 
 📋 CAPTION STRUCTURE (follow exactly):
 
@@ -841,13 +925,24 @@ def main():
             "kn": "Kannada",
         }.get(original_language, "Hollywood")
 
+        # Determine film era
+        release_date = movie.get("release_date", "")
+        year = int(release_date[:4]) if release_date and release_date[:4].isdigit() else 2020
+        if year < 1995:
+            era_label = "Golden Classic"
+        elif year < 2016:
+            era_label = "Modern Classic"
+        else:
+            era_label = "Recent Release"
+
         # Success summary
         log_message("=" * 80)
         log_message("SUCCESS SUMMARY")
         log_message("=" * 80)
         log_message(f"Movie Title: {movie_title}")
         log_message(f"Movie ID: {movie_id}")
-        log_message(f"Film Type: {language_label}")
+        log_message(f"Release Year: {year}")
+        log_message(f"Film Type: {language_label} | Era: {era_label}")
         log_message(f"India Platforms: {', '.join(streaming_platforms['IN']) or 'Not streaming'}")
         log_message(f"US Platforms: {', '.join(streaming_platforms['US']) or 'Not streaming'}")
         log_message(f"Instagram Post ID: {post_id}")
