@@ -49,17 +49,18 @@ jobs:
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HISTORY_REPO_TOKEN: ${{ secrets.HISTORY_REPO_TOKEN }}
         run: python main.py
 
-      # Step 6: Commit and push updated posted_movies.json
-      - name: Commit and push history
+      # Step 6: Commit any remaining card images (history lives in the state repo)
+      - name: Commit and push card images
         run: |
-          if git diff --quiet posted_movies.json; then
-            echo "No changes to posted_movies.json"
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain cards)" ]; then
+            echo "No card image changes to commit"
           else
-            git add posted_movies.json
-            git commit -m "Auto: Update posted movies history [skip ci]"
-            git push
+            git add -A cards
+            git commit -m "Auto: Add daily movie card image [skip ci]" || echo "nothing to commit"
+            git push || echo "nothing to push"
           fi
         continue-on-error: true
 

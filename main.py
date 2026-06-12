@@ -6,6 +6,7 @@ Automatically generates and publishes engaging movie posts to Instagram daily vi
 import os
 import json
 import time
+import base64
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -29,10 +30,19 @@ INSTAGRAM_ACCOUNT_ID = os.getenv("INSTAGRAM_ACCOUNT_ID")
 GH_TOKEN = os.getenv("GH_TOKEN")
 # Note: Canva API is not used. Image generation uses Pillow (local processing)
 
+# Separate "state" repository that stores the posted-movies history.
+# HISTORY_REPO_TOKEN must be a Personal Access Token with write (contents) access
+# to HISTORY_REPO. Falls back to GH_TOKEN if not provided.
+HISTORY_REPO = os.getenv("HISTORY_REPO", "ravibandoju/cinedrop_state")
+HISTORY_REPO_TOKEN = os.getenv("HISTORY_REPO_TOKEN") or GH_TOKEN
+HISTORY_FILE_PATH = "posted_movies.json"
+HISTORY_REPO_BRANCH = os.getenv("HISTORY_REPO_BRANCH", "main")
+
 # API Base URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 INSTAGRAM_GRAPH_BASE_URL = "https://graph.facebook.com/v18.0"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
+GITHUB_API_BASE_URL = "https://api.github.com"
 
 # Image card settings
 PAGE_HANDLE = "@cinedrop"
@@ -87,12 +97,75 @@ CARDS_DIR = Path("cards")
 # UTILITY FUNCTIONS
 # ============================================================================
 
+# Cache the SHA of the history file in the state repo so we can update it.
+_HISTORY_FILE_SHA = None
+
+
+def _history_api_headers():
+    """Build auth headers for the GitHub Contents API."""
+    return {
+        "Authorization": f"Bearer {HISTORY_REPO_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
 def load_posted_movies():
-    """Load the list of previously posted movie IDs from history file."""
+    """Load the posted-movies history from the separate state repo via the GitHub
+    Contents API. Each entry is a dict: {"id", "title", "rating", "date"}.
+    Falls back to a local file (and legacy list-of-ints format) if the remote
+    repo is unavailable. Caches the remote file SHA for the subsequent update.
+    """
+    global _HISTORY_FILE_SHA
+
+    if HISTORY_REPO_TOKEN:
+        try:
+            url = f"{GITHUB_API_BASE_URL}/repos/{HISTORY_REPO}/contents/{HISTORY_FILE_PATH}"
+            resp = requests.get(
+                url,
+                headers=_history_api_headers(),
+                params={"ref": HISTORY_REPO_BRANCH},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                payload = resp.json()
+                _HISTORY_FILE_SHA = payload.get("sha")
+                content = base64.b64decode(payload["content"]).decode("utf-8")
+                data = json.loads(content) if content.strip() else []
+                if data and isinstance(data[0], int):
+                    return [{"id": mid, "title": "", "rating": None, "date": ""} for mid in data]
+                return data
+            elif resp.status_code == 404:
+                # File doesn't exist yet in the state repo — start fresh
+                log_message(f"No history file found in {HISTORY_REPO}; starting fresh.", level="WARNING")
+                _HISTORY_FILE_SHA = None
+                return []
+            else:
+                log_message(
+                    f"Could not read history from {HISTORY_REPO}: {resp.status_code} {resp.text}",
+                    level="WARNING",
+                )
+        except Exception as e:
+            log_message(f"Error loading history from state repo: {str(e)}", level="WARNING")
+
+    # Fallback: local file
     if POSTED_MOVIES_FILE.exists():
         with open(POSTED_MOVIES_FILE, "r") as f:
-            return json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                return []
+        if data and isinstance(data[0], int):
+            return [{"id": mid, "title": "", "rating": None, "date": ""} for mid in data]
+        return data
     return []
+
+
+def get_posted_ids(history=None):
+    """Return a set of movie IDs that have already been posted."""
+    if history is None:
+        history = load_posted_movies()
+    return {entry["id"] for entry in history}
 
 
 def get_today_genre():
@@ -123,7 +196,7 @@ def get_movie():
     try:
         log_message("Fetching movie from TMDb API...")
 
-        posted_movies = load_posted_movies()
+        posted_ids = get_posted_ids()
         today_genre = get_today_genre()
         
         # Discover endpoint: get popular, high-rated movies of today's genre
@@ -150,7 +223,7 @@ def get_movie():
         movies = data["results"]
         movie = None
         for m in movies:
-            if m["id"] not in posted_movies:
+            if m["id"] not in posted_ids:
                 movie = m
                 break
 
@@ -577,37 +650,54 @@ def publish_to_instagram(image_url, caption):
 # STEP 6: SAVE HISTORY
 # ============================================================================
 
-def save_history(movie_id):
+def save_history(movie, card_path=None):
     """
-    Save the posted movie's TMDb ID to posted_movies.json so we don't repeat it.
-    Also commits the file back to the GitHub repo.
+    Append the posted movie (id + title + rating + date) to the history and write it
+    back to the separate state repo (HISTORY_REPO) via the GitHub Contents API.
+    The card image stays in the bot repo and is handled separately.
     """
+    global _HISTORY_FILE_SHA
     try:
-        log_message(f"Saving movie ID {movie_id} to history...")
+        movie_id = movie["id"]
+        movie_title = movie.get("title", "Unknown")
+        log_message(f"Saving '{movie_title}' (ID: {movie_id}) to history...")
 
-        posted_movies = load_posted_movies()
-        if movie_id not in posted_movies:
-            posted_movies.append(movie_id)
+        history = load_posted_movies()
+        if movie_id not in get_posted_ids(history):
+            history.append({
+                "id": movie_id,
+                "title": movie_title,
+                "rating": round(movie.get("vote_average", 0), 1),
+                "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            })
 
-        with open(POSTED_MOVIES_FILE, "w") as f:
-            json.dump(posted_movies, f, indent=2)
+        content_str = json.dumps(history, indent=2, ensure_ascii=False)
 
-        log_message(f"History updated. Total movies posted: {len(posted_movies)}")
+        if not HISTORY_REPO_TOKEN:
+            log_message("HISTORY_REPO_TOKEN/GH_TOKEN not set - saving history locally only.", level="WARNING")
+            with open(POSTED_MOVIES_FILE, "w") as f:
+                f.write(content_str)
+            return
 
-        # Commit back to GitHub repo if GH_TOKEN is available
-        if GH_TOKEN:
-            try:
-                log_message("Committing posted_movies.json back to repository...")
-                # Note: This requires git to be configured in the GitHub Actions environment
-                # The workflow file handles this with: git config --global user.name "GitHub Actions" etc.
-                os.system(f'git add {POSTED_MOVIES_FILE}')
-                os.system('git commit -m "Auto: Update posted movies history"')
-                os.system('git push')
-                log_message("Repository updated successfully")
-            except Exception as e:
-                log_message(f"Git commit/push error: {str(e)}", level="WARNING")
+        # Write the updated history back to the state repo via the Contents API
+        url = f"{GITHUB_API_BASE_URL}/repos/{HISTORY_REPO}/contents/{HISTORY_FILE_PATH}"
+        body = {
+            "message": f"Add '{movie_title}' to posted history",
+            "content": base64.b64encode(content_str.encode("utf-8")).decode("utf-8"),
+            "branch": HISTORY_REPO_BRANCH,
+        }
+        if _HISTORY_FILE_SHA:
+            body["sha"] = _HISTORY_FILE_SHA
+
+        resp = requests.put(url, headers=_history_api_headers(), json=body, timeout=15)
+        if resp.status_code in (200, 201):
+            _HISTORY_FILE_SHA = resp.json().get("content", {}).get("sha")
+            log_message(f"History updated in {HISTORY_REPO}. Total movies posted: {len(history)}")
         else:
-            log_message("GH_TOKEN not set - skipping git commit (file saved locally)", level="WARNING")
+            log_message(
+                f"Failed to update history in {HISTORY_REPO}: {resp.status_code} {resp.text}",
+                level="ERROR",
+            )
 
     except Exception as e:
         log_message(f"Error saving history: {str(e)}", level="ERROR")
@@ -659,8 +749,8 @@ def main():
         # Step 5: Publish to Instagram
         post_id = publish_to_instagram(public_image_url, caption)
 
-        # Step 6: Save to history
-        save_history(movie_id)
+        # Step 6: Save to history (and clean up the card image)
+        save_history(movie, card_path=image_url)
 
         # Success summary
         log_message("=" * 80)
