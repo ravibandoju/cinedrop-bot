@@ -616,6 +616,10 @@ def publish_to_instagram(image_url, caption):
         media_container_id = container_data["id"]
         log_message(f"Media container created: {media_container_id}")
 
+        # Give Instagram a moment to process the media before publishing
+        log_message("Waiting for media to be processed by Instagram...")
+        time.sleep(5)
+
         # Step 2: Publish the media
         publish_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media_publish"
         publish_payload = {
