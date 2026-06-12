@@ -420,16 +420,16 @@ def write_caption(movie, streaming_platforms):
             "kn": "Kannada",
         }.get(original_language, "Hollywood")
 
-        # Format streaming info: India-first display with flags
+        # Format streaming info: compact for brief captions
         india_platforms = streaming_platforms.get("IN", [])
         us_only_platforms = [p for p in streaming_platforms.get("US", []) if p not in india_platforms]
 
-        if india_platforms:
-            platforms_text = f"🇮🇳 {' · '.join(india_platforms)}"
-            if us_only_platforms:
-                platforms_text += f"\n🇺🇸 {' · '.join(us_only_platforms)}"
+        # Combine all platforms without region labels for brevity
+        all_platforms = india_platforms + us_only_platforms
+        if all_platforms:
+            platforms_text = "📺 " + " · ".join(all_platforms)
         else:
-            platforms_text = "Not streaming — rental/purchase only 🎬"
+            platforms_text = "Not streaming"
 
         movie_title = movie.get("title", "Unknown")
         release_date = movie.get("release_date", "")
@@ -495,27 +495,30 @@ Streaming Availability:
 - NEVER make an old film sound dated or boring — sell the timelessness
 {era_tone}
 
-📋 CAPTION STRUCTURE (follow exactly):
+📋 CAPTION STRUCTURE (strict — do not add more):
 
-[One killer hook line — funny, mysterious, or emotional depending on genre]
+[One line hook — max 10 words, make it hit hard]
 
-🎬 [Movie Title] ([Year])
-⭐ [Rating]/10 · [Genre] · [Language: Bollywood / Tamil / Telugu / Hollywood etc.]
+🎬 [Title] ([Year]) · ⭐[Rating]/10 · [Bollywood/Tamil/Hollywood etc.]
 
-[2-3 casual sentences on why this film is incredible — no spoilers, desi lens]
+[ONE sentence. Just one. Make it the most compelling thing about this film.]
 
-📺 Kahan dekhein:
-{platforms_text}
+📺 [Platform emoji + name only, no labels]
 
-[Spicy question or debate to drive comments — make it fun and India-relevant]
+[One punchy question. Max 10 words.]
 
-[10-15 hashtags — mix of English and Hindi tags, avoid tags with 1M+ posts]
+[Hashtags — one line, no line breaks between tags]
 
-RULES:
-- Total caption under 2200 characters
-- Only output the caption, nothing else
-- No explanations, no markdown, no extra notes
-- Hashtags on the last line only
+LENGTH RULES (non-negotiable):
+- Entire caption under 300 characters BEFORE hashtags
+- Hook: max 10 words
+- Description: exactly ONE sentence, no commas chaining clauses
+- Streaming: platform names only, no "Where to watch:" or "Kahan dekhein:" label
+- Question: max 10 words, end with 👇
+- Hashtags: last line, 8-10 tags only
+- NO filler words: no "This film", "This movie", "Make sure to", "Don't miss", "Are you looking for"
+- NO line breaks between hashtag words
+- NO explanations, no markdown, no extra notes — only output the caption
 """
 
         message = client.chat.completions.create(
