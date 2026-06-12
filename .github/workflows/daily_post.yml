@@ -49,7 +49,7 @@ jobs:
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HISTORY_REPO_TOKEN: ${{ secrets.HISTORY_REPO_TOKEN }}
+          HISTORY_REPO_TOKEN: ${{ secrets.GH_TOKEN }}
         run: python main.py
 
       # Step 6: Commit any remaining card images (history lives in the state repo)
