@@ -1786,34 +1786,96 @@ def build_caption(content, post_type):
 
 def upload_card_for_instagram(card_path):
     """
-    Upload card image to Telegra.ph for public hosting.
-    No API key or account needed — completely anonymous.
-    Instagram accepts Telegra.ph URLs without issues.
+    Upload card image to a public host that Instagram accepts.
+    Tries three methods in sequence — all free, no API key needed.
     """
-    try:
-        log_message(f"Uploading to Telegra.ph: {card_path}")
 
-        with open(card_path, "rb") as f:
-            files = {"file": (Path(card_path).name, f, "image/jpeg")}
+    # METHOD 1 — Compress image first to ensure it's under size limits
+    # then try Telegra.ph with correct multipart format
+    try:
+        log_message(f"Compressing card for upload...")
+
+        # Open and recompress at lower quality to reduce file size
+        img = Image.open(card_path)
+        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
+        img.save(compressed_path, "JPEG", quality=75, optimize=True)
+
+        file_size = Path(compressed_path).stat().st_size
+        log_message(f"Compressed size: {file_size / 1024:.0f} KB")
+
+        log_message("Trying Telegra.ph upload...")
+        with open(compressed_path, "rb") as f:
             resp = requests.post(
                 "https://telegra.ph/upload",
-                files=files,
+                files={"file": ("image.jpg", f, "image/jpeg")},
                 timeout=30
             )
-            resp.raise_for_status()
-            result = resp.json()
 
-            if isinstance(result, list) and result[0].get("src"):
-                url = f"https://telegra.ph{result[0]['src']}"
-                log_message(f"Telegra.ph upload successful: {url}")
-                return url
-            else:
-                log_message(f"Telegra.ph unexpected response: {result}", level="ERROR")
-                return None
+            if resp.status_code == 200:
+                result = resp.json()
+                if isinstance(result, list) and len(result) > 0 and result[0].get("src"):
+                    url = f"https://telegra.ph{result[0]['src']}"
+                    log_message(f"Telegra.ph upload successful: {url}")
+                    return url
+
+            log_message(f"Telegra.ph returned: {resp.status_code} {resp.text}", level="WARNING")
 
     except Exception as e:
-        log_message(f"Telegra.ph upload failed: {str(e)}", level="ERROR")
-        return None
+        log_message(f"Telegra.ph failed: {str(e)}", level="WARNING")
+
+    # METHOD 2 — catbox.moe (completely free, no account, 200MB limit)
+    try:
+        log_message("Trying catbox.moe upload...")
+        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
+        if not Path(compressed_path).exists():
+            img = Image.open(card_path)
+            img.save(compressed_path, "JPEG", quality=75, optimize=True)
+
+        with open(compressed_path, "rb") as f:
+            resp = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": ("image.jpg", f, "image/jpeg")},
+                timeout=30
+            )
+
+            if resp.status_code == 200 and resp.text.startswith("https://"):
+                url = resp.text.strip()
+                log_message(f"Catbox.moe upload successful: {url}")
+                return url
+
+            log_message(f"Catbox.moe returned: {resp.status_code} {resp.text}", level="WARNING")
+
+    except Exception as e:
+        log_message(f"Catbox.moe failed: {str(e)}", level="WARNING")
+
+    # METHOD 3 — 0x0.st (minimalist free host, no account, 512MB limit)
+    try:
+        log_message("Trying 0x0.st upload...")
+        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
+        if not Path(compressed_path).exists():
+            img = Image.open(card_path)
+            img.save(compressed_path, "JPEG", quality=75, optimize=True)
+
+        with open(compressed_path, "rb") as f:
+            resp = requests.post(
+                "https://0x0.st",
+                files={"file": ("image.jpg", f, "image/jpeg")},
+                timeout=30
+            )
+
+            if resp.status_code == 200 and resp.text.startswith("https://"):
+                url = resp.text.strip()
+                log_message(f"0x0.st upload successful: {url}")
+                return url
+
+            log_message(f"0x0.st returned: {resp.status_code} {resp.text}", level="WARNING")
+
+    except Exception as e:
+        log_message(f"0x0.st failed: {str(e)}", level="WARNING")
+
+    log_message("All upload methods failed.", level="ERROR")
+    return None
 
 
 def publish_to_instagram(image_url, caption):
@@ -2058,6 +2120,14 @@ def main():
 
         # Save history immediately after main post succeeds
         save_history(movie, card_path=card_path)
+
+        # Clean up compressed upload files
+        for pattern in ["_compressed.jpg"]:
+            for f in Path("cards").glob(f"*{pattern}"):
+                try:
+                    f.unlink()
+                except:
+                    pass
 
         # --- STORY STRATEGY ---
         # Posting a Story immediately after a feed post does two things:
