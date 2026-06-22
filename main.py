@@ -788,6 +788,19 @@ def get_movie():
 
         # Attach genre name for downstream hashtag generation
         movie["_genre_name"] = today_genre["name"]
+        
+        # Fetch full movie details to get backdrop_path
+        try:
+            detail_url = f"{TMDB_BASE_URL}/movie/{movie['id']}"
+            detail_resp = requests.get(detail_url, params={"api_key": TMDB_API_KEY}, timeout=10)
+            if detail_resp.status_code == 200:
+                detail = detail_resp.json()
+                movie["backdrop_path"] = detail.get("backdrop_path")
+                movie["genres"] = detail.get("genres", movie.get("genres", []))
+                log_message(f"Backdrop available: {bool(movie.get('backdrop_path'))}")
+        except Exception as e:
+            log_message(f"Could not fetch movie details: {e}", level="WARNING")
+            movie["backdrop_path"] = None
 
         log_message(f"Selected: '{movie['title']}' ({movie.get('release_date', '')[:4]}) - {lang_label} ({movie.get('_cinema_type')}) - Rating: {movie.get('vote_average')}/10")
         return movie
@@ -1077,552 +1090,517 @@ JSON only. No markdown. No explanation.
 # STEP 4: PILLOW CARD RENDERING FUNCTIONS
 # ============================================================================
 
-def render_recommendation(movie, content, streaming_platforms):
-    """Render recommendation card: poster + metadata + streaming on right panel."""
+# Day-of-week card style dispatcher
+CARD_STYLE_BY_DAY = {
+    0: "b2",   # Monday    — dialogue poster
+    1: "b3",   # Tuesday   — cinedrop score
+    2: "d1",   # Wednesday — mood line
+    3: "d2",   # Thursday  — quote + bar
+    4: "b3",   # Friday    — cinedrop score
+    5: "b2",   # Saturday  — dialogue poster
+    6: "d1",   # Sunday    — mood line
+}
+
+def _load_fonts():
+    """Load fonts with fallback to default."""
     try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Download poster
-        poster_path = movie.get("poster_path")
-        if poster_path:
-            poster_url = f"{TMDB_IMAGE_BASE_URL}/w342{poster_path}"
-            try:
-                resp = requests.get(poster_url, timeout=10)
-                resp.raise_for_status()
-                poster = Image.open(BytesIO(resp.content)).convert("RGB")
-                poster.thumbnail((440, 900), Image.Resampling.LANCZOS)
-                
-                # Round corners via mask
-                mask = Image.new("L", poster.size, 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle((0, 0, poster.size[0], poster.size[1]), radius=20, fill=255)
-                poster.putalpha(mask)
-                
-                card.paste(poster, (40, 225), poster)
-            except Exception as e:
-                log_message(f"Could not download poster: {str(e)}", level="WARNING")
-        
-        # Right panel (x=520 to x=1040)
-        draw.rectangle([(520, 50), (1040, 1300)], fill=COLOR_BG_CARD)
-        
-        # Cinema & era badges at top
-        original_language = movie.get("original_language", "en")
-        cinema_color = get_cinema_color(original_language)
-        cinema_label = "🇮🇳 Indian" if original_language in ["hi", "ta", "te", "ml", "kn"] else "🎬 Hollywood"
-        
-        release_date = movie.get("release_date", "")
-        year = int(release_date[:4]) if release_date else 0
-        era_label, era_color = get_era_text(year)
-        
-        # Cinema badge
-        cinema_font = load_font(OPENSANS_BOLD, 20)
-        draw.rectangle([(540, 70), (620, 105)], fill=cinema_color)
-        draw.text((545, 75), cinema_label, font=cinema_font, fill=COLOR_WHITE)
-        
-        # Era badge
-        era_text = f"⭐ {era_label.upper()}"
-        draw.rectangle([(630, 70), (750, 105)], fill=era_color)
-        draw.text((635, 75), era_text, font=cinema_font, fill=COLOR_WHITE)
-        
-        # Movie title
-        title_font = load_font(BEBAS, 72)
-        title = movie.get("title", "Unknown")
-        lines = wrap_text(draw, title, title_font, 480)
-        y = 120
-        for line in lines:
-            draw.text((540, y), line, font=title_font, fill=COLOR_WHITE)
-            bbox = draw.textbbox((540, y), line, font=title_font)
-            y += bbox[3] - bbox[1] + 5
-        
-        # Year + director
-        subtitle_font = load_font(OPENSANS, 28)
-        year_text = f"{year} • Director TBD"
-        draw.text((540, y), year_text, font=subtitle_font, fill=COLOR_GRAY)
-        
-        # Rating
-        rating_font = load_font(BEBAS, 96)
-        rating_small_font = load_font(OPENSANS, 28)
-        rating = round(movie.get("vote_average", 0), 1)
-        draw.text((540, y + 80), str(rating), font=rating_font, fill=COLOR_GOLD_TEXT)
-        draw.text((720, y + 100), "/10", font=rating_small_font, fill=COLOR_GRAY)
-        
-        # Divider
-        draw.line([(540, y + 180), (1000, y + 180)], fill=COLOR_DARK_GRAY, width=1)
-        
-        # Streaming label
-        streaming_label_font = load_font(OPENSANS, 20)
-        draw.text((540, y + 200), "STREAMING ON", font=streaming_label_font, fill=COLOR_GRAY)
-        
-        # Platform pills
-        india_platforms = streaming_platforms.get("IN", [])
-        platform_font = load_font(OPENSANS_BOLD, 18)
-        px = 540
-        py = y + 240
-        for platform in india_platforms[:3]:
-            color = PROVIDER_COLORS.get(platform, COLOR_DARK_GRAY)
-            bbox = draw.textbbox((0, 0), platform, font=platform_font)
-            w = bbox[2] - bbox[0] + 20
-            h = bbox[3] - bbox[1] + 10
-            draw.rounded_rectangle([(px, py), (px + w, py + h)], radius=8, fill=color)
-            draw.text((px + 10, py + 5), platform, font=platform_font, fill=COLOR_WHITE)
-            px += w + 10
-        
-        # Bottom bar
-        draw.rectangle([(0, 1290), (CARD_WIDTH, 1350)], fill=COLOR_BG_DARK)
-        handle_font = load_font(OPENSANS, 24)
-        draw.text((40, 1305), PAGE_HANDLE, font=handle_font, fill=COLOR_GRAY)
-        draw.text((CARD_WIDTH - 280, 1305), "save this 🔖", font=handle_font, fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_recommendation.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Recommendation card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering recommendation card: {str(e)}", level="ERROR")
-        raise
+        return {
+            "title":   ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 72),
+            "large":   ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 52),
+            "medium":  ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 38),
+            "body":    ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 30),
+            "small":   ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 24),
+            "tiny":    ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 20),
+        }
+    except:
+        d = ImageFont.load_default()
+        return {k: d for k in ["title","large","medium","body","small","tiny"]}
 
+def _download_poster(poster_path, size="w780"):
+    """Download poster image from TMDb."""
+    url = f"https://image.tmdb.org/t/p/{size}{poster_path}"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    return Image.open(BytesIO(resp.content)).convert("RGB")
 
-def render_dialogue(movie, content):
-    """Render dialogue card: centered iconic line."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Accent bar at top
-        original_language = movie.get("original_language", "en")
-        accent_color = get_cinema_color(original_language)
-        draw.rectangle([(0, 0), (CARD_WIDTH, 8)], fill=accent_color)
-        
-        # Large quote mark
-        quote_font = load_font(BEBAS, 200)
-        draw.text((100, 200), '"', font=quote_font, fill=accent_color)
-        
-        # Dialogue text
-        dialogue_font = load_font(OPENSANS_BOLD, 52)
-        dialogue = content.get("dialogue", "No dialogue")
-        draw.text((100, 500), dialogue, font=dialogue_font, fill=COLOR_WHITE)
-        
-        # Film attribution
-        title = movie.get("title", "Unknown")
-        release_date = movie.get("release_date", "")
-        year = release_date[:4] if release_date else "N/A"
-        attribution_font = load_font(OPENSANS, 28)
-        attribution = f"— {title} · {year}"
-        bbox = draw.textbbox((0, 0), attribution, font=attribution_font)
-        x = (CARD_WIDTH - (bbox[2] - bbox[0])) // 2
-        draw.text((x, 1100), attribution, font=attribution_font, fill=accent_color)
-        
-        # Bottom bar
-        draw.rectangle([(0, 1280), (CARD_WIDTH, 1350)], fill=accent_color)
-        label_font = load_font(BEBAS, 36)
-        draw.text((40, 1295), "ICONIC DIALOGUE", font=label_font, fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 280, 1303), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_dialogue.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Dialogue card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering dialogue card: {str(e)}", level="ERROR")
-        raise
+def _get_card_background(movie):
+    """
+    Randomly picks a background image source for the card.
+    Weights: 50% poster, 30% TMDb backdrop, 20% solid mood color.
+    Returns a PIL Image (RGB).
+    """
+    poster_path = movie.get("poster_path")
+    backdrop_path = movie.get("backdrop_path")
+    
+    # Weighted choice
+    choice = random.choices(
+        ["poster", "backdrop", "mood_color"],
+        weights=[50, 30, 20]
+    )[0]
+    
+    # Fallback if source unavailable
+    if choice == "backdrop" and not backdrop_path:
+        choice = "poster"
+    if choice == "poster" and not poster_path:
+        choice = "mood_color"
+    
+    log_message(f"Card background source: {choice}")
+    
+    # SOURCE 1 — Standard poster (w780)
+    if choice == "poster" and poster_path:
+        try:
+            url = f"https://image.tmdb.org/t/p/w780{poster_path}"
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            img = Image.open(BytesIO(resp.content)).convert("RGB")
+            movie["_bg_source"] = "poster"
+            return img
+        except Exception as e:
+            log_message(f"Poster fetch failed: {e} — falling back", level="WARNING")
+    
+    # SOURCE 2 — TMDb backdrop (cinematic wide still)
+    if choice == "backdrop" and backdrop_path:
+        try:
+            url = f"https://image.tmdb.org/t/p/w1280{backdrop_path}"
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            img = Image.open(BytesIO(resp.content)).convert("RGB")
+            movie["_bg_source"] = "backdrop"
+            return img
+        except Exception as e:
+            log_message(f"Backdrop fetch failed: {e} — falling back", level="WARNING")
+    
+    # SOURCE 3 — Mood color canvas (solid color gradient)
+    genre_name = movie.get("_genre_name", "Drama")
+    MOOD_COLORS = {
+        "Thriller":        [(10,5,20),   (30,10,50)],
+        "Horror":          [(5,5,5),     (20,5,5)],
+        "Drama":           [(8,12,20),   (15,25,40)],
+        "Romance":         [(20,5,15),   (40,10,30)],
+        "Comedy":          [(15,12,5),   (30,25,10)],
+        "Action":          [(15,5,5),    (35,10,5)],
+        "Science Fiction": [(5,10,20),   (10,20,45)],
+        "Family":          [(8,15,8),    (15,30,15)],
+    }
+    colors = MOOD_COLORS.get(genre_name, [(8,8,12), (15,15,25)])
+    c1, c2 = colors[0], colors[1]
+    
+    # Create gradient canvas
+    canvas = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), c1)
+    for y in range(CARD_HEIGHT):
+        factor = y / CARD_HEIGHT
+        r = int(c1[0] + (c2[0]-c1[0]) * factor)
+        g = int(c1[1] + (c2[1]-c1[1]) * factor)
+        b = int(c1[2] + (c2[2]-c1[2]) * factor)
+        ImageDraw.Draw(canvas).rectangle([(0,y),(CARD_WIDTH,y+1)], fill=(r,g,b))
+    
+    # Add subtle noise texture
+    noise_draw = ImageDraw.Draw(canvas)
+    for _ in range(800):
+        nx = random.randint(0, CARD_WIDTH)
+        ny = random.randint(0, CARD_HEIGHT)
+        brightness = random.randint(15, 35)
+        noise_draw.point((nx,ny), fill=(brightness,brightness,brightness))
+    
+    movie["_bg_source"] = "mood_color"
+    log_message(f"Mood color canvas generated for genre: {genre_name}")
+    return canvas
 
+def _get_cinema_info(movie):
+    """Get cinema label and color based on language."""
+    lang = movie.get("original_language", "en")
+    is_indian = lang in ["hi","ta","te","ml","kn"]
+    label = {"hi":"Bollywood","ta":"Tamil","te":"Telugu","ml":"Malayalam","kn":"Kannada"}.get(lang, "Hollywood")
+    color = (255,103,0) if is_indian else (108,63,194)
+    return label, color, is_indian
 
-def render_hot_take(movie, content):
-    """Render hot take card: unpopular opinion prominently displayed."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Hot take badge
-        badge_font = load_font(BEBAS, 32)
-        badge_text = "UNPOPULAR OPINION"
-        bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
-        badge_w = bbox[2] - bbox[0] + 20
-        draw.rectangle([(40, 60), (40 + badge_w, 100)], fill=COLOR_RED)
-        draw.text((50, 65), badge_text, font=badge_font, fill=COLOR_WHITE)
-        
-        # Main take text
-        take_font = load_font(BEBAS, 88)
-        take = content.get("take", "No take")
-        y = 160
-        lines = wrap_text(draw, take, take_font, 1000)
-        for line in lines:
-            draw.text((40, y), line, font=take_font, fill=COLOR_WHITE)
-            bbox = draw.textbbox((40, y), line, font=take_font)
-            y += bbox[3] - bbox[1] + 10
-        
-        # Explanation text
-        explanation_font = load_font(OPENSANS, 38)
-        explanation = content.get("explanation", "")
-        y += 30
-        lines = wrap_text(draw, explanation, explanation_font, 960)
-        for line in lines:
-            draw.text((40, y), line, font=explanation_font, fill=COLOR_GRAY)
-            bbox = draw.textbbox((40, y), line, font=explanation_font)
-            y += bbox[3] - bbox[1] + 8
-        
-        # Film attribution
-        title = movie.get("title", "Unknown")
-        release_date = movie.get("release_date", "")
-        year = release_date[:4] if release_date else "N/A"
-        original_language = movie.get("original_language", "en")
-        accent_color = get_cinema_color(original_language)
-        
-        attribution = f"— {title} · {year}"
-        attribution_font = load_font(OPENSANS_BOLD, 30)
-        bbox = draw.textbbox((0, 0), attribution, font=attribution_font)
-        x = (CARD_WIDTH - (bbox[2] - bbox[0])) // 2
-        draw.text((x, 1080), attribution, font=attribution_font, fill=accent_color)
-        
-        # Bottom bar
-        draw.rectangle([(0, 1280), (CARD_WIDTH, 1350)], fill=COLOR_RED)
-        cta_font = load_font(BEBAS, 36)
-        cta = content.get("cta", "What do you think?")
-        draw.text((40, 1295), cta, font=cta_font, fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 280, 1303), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_hot_take.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Hot take card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering hot take card: {str(e)}", level="ERROR")
-        raise
+def _get_era(movie):
+    """Get era label, color, and year."""
+    year = int(movie.get("release_date","2000")[:4] or 2000)
+    if year < 1995: return "CLASSIC", (212,175,55), year
+    if year < 2016: return "MODERN", (100,149,237), year
+    return "NEW", (50,205,50), year
 
+def _draw_pill(draw, x, y, text, font, bg_color, text_color=(255,255,255), padding=18):
+    """Draw rounded pill with text."""
+    bbox = draw.textbbox((0,0), text, font=font)
+    w = bbox[2] - bbox[0] + padding * 2
+    h = bbox[3] - bbox[1] + 14
+    draw.rounded_rectangle([(x, y), (x+w, y+h)], radius=h//2, fill=bg_color)
+    draw.text((x+padding, y+7), text, font=font, fill=text_color)
+    return w, h
 
-def render_mood_pick(movie, content, streaming_platforms):
-    """Render mood pick card: mood-based recommendation with vibe."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Get mood color
-        genres = movie.get("genres", [])
-        genre_name = genres[0]["name"] if genres else "Drama"
-        mood_color = get_mood_color(genre_name)
-        
-        # Tint background with mood color
-        tint = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), mood_color)
-        card = Image.blend(card, tint, 0.05)
-        draw = ImageDraw.Draw(card)
-        
-        # Mood badge
-        badge_font = load_font(BEBAS, 32)
-        draw.rectangle([(40, 60), (280, 110)], fill=mood_color)
-        draw.text((50, 68), "WATCH THIS IF...", font=badge_font, fill=COLOR_WHITE)
-        
-        # Mood line
-        mood_font = load_font(BEBAS, 72)
-        mood_line = content.get("mood_line", "You need something good")
-        y = 140
-        lines = wrap_text(draw, mood_line, mood_font, 900)
-        for line in lines:
-            draw.text((60, y), line, font=mood_font, fill=COLOR_WHITE)
-            bbox = draw.textbbox((60, y), line, font=mood_font)
-            y += bbox[3] - bbox[1] + 8
-        
-        # Vibe
-        vibe_font = load_font(OPENSANS, 36)
-        vibe = content.get("vibe", "")
-        draw.text((60, y + 20), vibe, font=vibe_font, fill=COLOR_GRAY)
-        
-        # Divider
-        draw.line([(60, 680), (1000, 680)], fill=mood_color, width=1)
-        
-        # Bottom section with poster & info
-        poster_path = movie.get("poster_path")
-        if poster_path:
-            poster_url = f"{TMDB_IMAGE_BASE_URL}/w185{poster_path}"
-            try:
-                resp = requests.get(poster_url, timeout=10)
-                resp.raise_for_status()
-                poster = Image.open(BytesIO(resp.content)).convert("RGB")
-                poster.thumbnail((200, 280), Image.Resampling.LANCZOS)
-                
-                # Round corners
-                mask = Image.new("L", poster.size, 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle((0, 0, poster.size[0], poster.size[1]), radius=10, fill=255)
-                poster.putalpha(mask)
-                
-                card.paste(poster, (60, 720), poster)
-            except Exception as e:
-                log_message(f"Could not download poster: {str(e)}", level="WARNING")
-        
-        # Movie info on right of poster
-        title_font = load_font(BEBAS, 56)
-        title = movie.get("title", "Unknown")
-        draw.text((280, 720), title, font=title_font, fill=COLOR_WHITE)
-        
-        release_date = movie.get("release_date", "")
-        year = release_date[:4] if release_date else "N/A"
-        lang = movie.get("original_language", "en")
-        lang_label = get_language_label(lang)
-        
-        info_font = load_font(OPENSANS, 26)
-        draw.text((280, 800), f"{year} • {lang_label}", font=info_font, fill=COLOR_GRAY)
-        
-        rating = round(movie.get("vote_average", 0), 1)
-        rating_font = load_font(BEBAS, 64)
-        draw.text((280, 850), f"⭐ {rating}", font=rating_font, fill=COLOR_GOLD_TEXT)
-        
-        # Streaming
-        india_platforms = streaming_platforms.get("IN", [])
-        platform_text = ", ".join(india_platforms[:2]) if india_platforms else "Not streaming"
-        platform_font = load_font(OPENSANS, 22)
-        draw.text((280, 940), platform_text, font=platform_font, fill=mood_color)
-        
-        # Bottom bar
-        draw.rectangle([(0, 1280), (CARD_WIDTH, 1350)], fill=mood_color)
-        draw.text((40, 1303), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        if india_platforms:
-            draw.text((CARD_WIDTH - 400, 1303), f"🇮🇳 {india_platforms[0]}", font=load_font(OPENSANS, 22), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_mood_pick.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Mood pick card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering mood pick card: {str(e)}", level="ERROR")
-        raise
+def _wrap_text(draw, text, font, max_width):
+    """Wrap text to fit within max_width."""
+    words = text.split()
+    lines, line = [], ""
+    for word in words:
+        test = (line + " " + word).strip()
+        if draw.textbbox((0,0), test, font=font)[2] <= max_width:
+            line = test
+        else:
+            if line: lines.append(line)
+            line = word
+    if line: lines.append(line)
+    return lines
 
+def _save_card(card, movie_id):
+    """Save card to disk."""
+    CARDS_DIR.mkdir(exist_ok=True)
+    path = CARDS_DIR / f"card_{movie_id}.jpg"
+    card.convert("RGB").save(str(path), "JPEG", quality=92)
+    log_message(f"Card saved: {path}")
+    return str(path)
 
-def render_trivia(movie, content):
-    """Render trivia card: fun behind-the-scenes fact."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Trivia badge
-        badge_font = load_font(BEBAS, 30)
-        draw.rectangle([(40, 60), (280, 105)], fill=COLOR_PURPLE)
-        draw.text((50, 68), "DID YOU KNOW", font=badge_font, fill=COLOR_WHITE)
-        
-        # Large ? watermark
-        watermark_font = load_font(BEBAS, 400)
-        watermark_bbox = draw.textbbox((0, 0), "?", font=watermark_font)
-        wx = (CARD_WIDTH - (watermark_bbox[2] - watermark_bbox[0])) // 2
-        draw.text((wx, 300), "?", font=watermark_font, fill=COLOR_PURPLE, alpha=20)
-        
-        # Fact text
-        fact_font = load_font(OPENSANS_BOLD, 44)
-        fact = content.get("fact", "No fact")
-        
-        # Draw fact with numbers highlighted
-        lines = wrap_text(draw, fact, fact_font, 900)
-        y = 500
-        for line in lines:
-            # Check for numbers and highlight them
-            words = line.split()
-            x = 90
-            for word in words:
-                if re.search(r"\d", word):
-                    draw.text((x, y), word, font=fact_font, fill=COLOR_PURPLE)
-                else:
-                    draw.text((x, y), word, font=fact_font, fill=COLOR_WHITE)
-                
-                bbox = draw.textbbox((x, y), word + " ", font=fact_font)
-                x += bbox[2] - bbox[0]
-            
-            bbox = draw.textbbox((90, y), line, font=fact_font)
-            y += bbox[3] - bbox[1] + 10
-        
-        # Film attribution
-        title = movie.get("title", "Unknown")
-        release_date = movie.get("release_date", "")
-        year = release_date[:4] if release_date else "N/A"
-        attribution = f"— {title} · {year}"
-        attribution_font = load_font(OPENSANS, 28)
-        bbox = draw.textbbox((0, 0), attribution, font=attribution_font)
-        x = (CARD_WIDTH - (bbox[2] - bbox[0])) // 2
-        draw.text((x, 1100), attribution, font=attribution_font, fill=COLOR_PURPLE)
-        
-        # Bottom bar
-        draw.rectangle([(0, 1280), (CARD_WIDTH, 1350)], fill=COLOR_PURPLE)
-        label_font = load_font(BEBAS, 34)
-        draw.text((40, 1295), "FILM TRIVIA", font=label_font, fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 500, 1295), "share with a film buff 🎬", font=load_font(OPENSANS, 22), fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 200, 1303), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_trivia.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Trivia card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering trivia card: {str(e)}", level="ERROR")
-        raise
+def render_b2(movie, streaming_platforms):
+    """Dialogue poster — full poster background with iconic dialogue overlay."""
+    fonts = _load_fonts()
+    poster_img = _get_card_background(movie)
+    cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
+    era_text, era_color, year = _get_era(movie)
+    rating = round(movie.get("vote_average", 0), 1)
+    title  = movie.get("title", "Unknown")
 
+    # Background — poster scaled, blurred, darkened
+    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=0))  # no blur — keep poster sharp
+    dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0,0,0))
+    card = Image.blend(bg, dark, alpha=0.45)
+    
+    # Log background source
+    bg_source = movie.get("_bg_source", "poster")
+    log_message(f"Background used in render_b2: {bg_source}")
+    
+    # Decorative element if mood color canvas
+    if movie.get("_bg_source") == "mood_color":
+        try:
+            emoji_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 380) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
+            card_temp = card.convert("RGBA")
+            draw_temp = ImageDraw.Draw(card_temp)
+            draw_temp.text((CARD_WIDTH//2 - 200, CARD_HEIGHT//2 - 250), "🎬", font=emoji_font, fill=(20,20,30,150))
+            card = card_temp.convert("RGB")
+        except:
+            pass
 
-def render_list(movie, content):
-    """Render list card: 5 similar films."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Header
-        draw.rectangle([(0, 0), (CARD_WIDTH, 280)], fill=COLOR_BG_CARD)
-        
-        header_label_font = load_font(OPENSANS, 24)
-        draw.text((60, 60), "THIS WEEK ON CINEDROP", font=header_label_font, fill=COLOR_SAFFRON)
-        
-        title_font = load_font(BEBAS, 72)
-        list_title = content.get("list_title", "5 Films Like This")
-        y = 100
-        lines = wrap_text(draw, list_title, title_font, 960)
-        for line in lines:
-            draw.text((60, y), line, font=title_font, fill=COLOR_WHITE)
-            bbox = draw.textbbox((60, y), line, font=title_font)
-            y += bbox[3] - bbox[1] + 5
-        
-        # List items
-        films = content.get("films", [])
-        item_height = 170
-        y = 280
-        
-        for idx, film in enumerate(films[:5]):
-            # Alternate background
-            if idx % 2 == 0:
-                draw.rectangle([(0, y), (CARD_WIDTH, y + item_height)], fill=COLOR_BG_DARK)
-            else:
-                draw.rectangle([(0, y), (CARD_WIDTH, y + item_height)], fill=COLOR_BG_CARD)
-            
-            # Number
-            num_font = load_font(BEBAS, 56)
-            draw.text((60, y + 30), str(idx + 1), font=num_font, fill=COLOR_SAFFRON)
-            
-            # Film title & language
-            film_font = load_font(OPENSANS_BOLD, 36)
-            draw.text((150, y + 30), film.get("title", "Unknown"), font=film_font, fill=COLOR_WHITE)
-            
-            info_font = load_font(OPENSANS, 24)
-            lang = film.get("language", "en")
-            year = film.get("year", "")
-            draw.text((150, y + 75), f"{lang} · {year}", font=info_font, fill=COLOR_GRAY)
-            
-            # Rating
-            rating_font = load_font(BEBAS, 40)
-            rating = film.get("rating", 0)
-            draw.text((CARD_WIDTH - 150, y + 40), f"{rating}", font=rating_font, fill=COLOR_GOLD_TEXT)
-            
-            # Divider
-            if idx < 4:
-                draw.line([(60, y + item_height - 1), (CARD_WIDTH - 60, y + item_height - 1)], fill=COLOR_DARK_GRAY, width=1)
-            
-            y += item_height
-        
-        # Bottom bar
-        draw.rectangle([(0, 1280), (CARD_WIDTH, 1350)], fill=COLOR_SAFFRON)
-        label_font = load_font(BEBAS, 34)
-        draw.text((40, 1295), "SWIPE FOR MORE →", font=label_font, fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 280, 1303), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_list.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"List card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering list card: {str(e)}", level="ERROR")
-        raise
+    # Strong dark gradient bottom half for readability
+    grad = Image.new("RGBA", (CARD_WIDTH, 700), (0,0,0,0))
+    gd = ImageDraw.Draw(grad)
+    for i in range(700):
+        alpha = int((i/700) * 230)
+        gd.rectangle([(0,i),(CARD_WIDTH,i+1)], fill=(0,0,0,alpha))
+    card_rgba = card.convert("RGBA")
+    card_rgba.paste(grad, (0, CARD_HEIGHT-700), grad)
+    card = card_rgba.convert("RGB")
 
+    draw = ImageDraw.Draw(card)
 
-def render_rating(movie, content):
-    """Render rating card: 4 metric scores + verdict."""
-    try:
-        card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), COLOR_BG_DARK)
-        draw = ImageDraw.Draw(card)
-        
-        # Header
-        header_font = load_font(OPENSANS, 28)
-        draw.text((60, 60), "CINEDROP RATES", font=header_font, fill=COLOR_GRAY)
-        
-        title_font = load_font(BEBAS, 96)
-        title = movie.get("title", "Unknown")
-        draw.text((60, 100), title, font=title_font, fill=COLOR_WHITE)
-        
-        release_date = movie.get("release_date", "")
-        year = release_date[:4] if release_date else "N/A"
-        lang = movie.get("original_language", "en")
-        lang_label = get_language_label(lang)
-        
-        info_font = load_font(OPENSANS, 30)
-        draw.text((60, 210), f"{year} • {lang_label}", font=info_font, fill=COLOR_GRAY)
-        
-        # Metrics
-        metrics = [
-            ("Story", content.get("story", 8.0)),
-            ("Performances", content.get("performances", 8.5)),
-            ("Rewatch value", content.get("rewatch", 8.0)),
-            ("Emotional hit", content.get("emotional_hit", 8.5)),
-        ]
-        
-        y = 280
-        label_font = load_font(OPENSANS_BOLD, 32)
-        score_font = load_font(BEBAS, 56)
-        bar_height = 16
-        
-        for label, score in metrics:
-            # Label
-            draw.text((60, y + 40), label, font=label_font, fill=COLOR_GRAY)
-            
-            # Score
-            draw.text((900, y + 40), str(score), font=score_font, fill=COLOR_SAFFRON)
-            
-            # Bar background
-            bar_y = y + 90
-            draw.rounded_rectangle([(60, bar_y), (850, bar_y + bar_height)], radius=8, fill=COLOR_DARK_GRAY)
-            
-            # Bar fill
-            bar_width = int((score / 10.0) * 790)
-            draw.rounded_rectangle([(60, bar_y), (60 + bar_width, bar_y + bar_height)], radius=8, fill=COLOR_SAFFRON)
-            
-            # Divider
-            if metrics.index((label, score)) < len(metrics) - 1:
-                draw.line([(60, y + 130), (900, y + 130)], fill=COLOR_DARK_GRAY, width=1)
-            
-            y += 160
-        
-        # Verdict bar
-        verdict_y = 980
-        draw.rectangle([(0, verdict_y), (CARD_WIDTH, verdict_y + 120)], fill=COLOR_SAFFRON)
-        
-        verdict_label_font = load_font(BEBAS, 36)
-        verdict_font = load_font(BEBAS, 48)
-        verdict_text = content.get("verdict", "MUST WATCH")
-        verdict_line = content.get("verdict_line", "A solid pick")
-        
-        draw.text((60, verdict_y + 15), "VERDICT:", font=verdict_label_font, fill=COLOR_WHITE)
-        draw.text((280, verdict_y + 15), verdict_text, font=verdict_font, fill=COLOR_WHITE)
-        draw.text((CARD_WIDTH - 280, verdict_y + 35), PAGE_HANDLE, font=load_font(OPENSANS, 24), fill=COLOR_WHITE)
-        
-        # Save card
-        CARDS_DIR.mkdir(exist_ok=True)
-        card_path = CARDS_DIR / f"card_{movie['id']}_rating.jpg"
-        card.save(str(card_path), "JPEG", quality=CARD_QUALITY)
-        log_message(f"Rating card rendered: {card_path}")
-        return str(card_path)
-        
-    except Exception as e:
-        log_message(f"Error rendering rating card: {str(e)}", level="ERROR")
-        raise
+    # Top badges
+    _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
+    cinema_w = draw.textbbox((0,0), cinema_label, font=fonts["small"])[2] + 54
+    _draw_pill(draw, 40 + cinema_w + 12, 50, era_text, fonts["tiny"],
+               era_color, (0,0,0) if era_color == (212,175,55) else (255,255,255))
+
+    # Dialogue quote — center of card
+    dialogue = movie.get("_dialogue", "Ek baar jo tune commitment kar di... phir toh khud ki bhi nahi sunta.")
+    quote_y = 480
+    # Left accent bar
+    draw.rectangle([(50, quote_y), (56, quote_y+180)], fill=cinema_color)
+    # Large open quote
+    draw.text((70, quote_y-20), "\u201c", font=fonts["title"], fill=(*cinema_color, 180))
+    # Wrap and draw dialogue
+    q_lines = _wrap_text(draw, dialogue, fonts["body"], 900)
+    for i, line in enumerate(q_lines[:4]):
+        draw.text((72, quote_y + 50 + i*44), line, font=fonts["body"],
+                  fill=(220,220,220))
+
+    # Movie info bottom
+    info_y = CARD_HEIGHT - 200
+    title_lines = _wrap_text(draw, title.upper(), fonts["large"], 1000)
+    for i, line in enumerate(title_lines[:2]):
+        draw.text((50, info_y + i*62), line, font=fonts["large"], fill=(255,255,255))
+
+    meta_y = info_y + len(title_lines[:2])*62 + 8
+    draw.text((50, meta_y), f"{rating}/10  \u00b7  {year}", font=fonts["small"], fill=(255,215,0))
+
+    # Streaming
+    india_p = streaming_platforms.get("IN", [])[:2]
+    stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
+    draw.text((50, meta_y+38), f"Watch on: {stream_text}", font=fonts["tiny"], fill=(160,160,160))
+
+    # Bottom bar
+    bar_y = CARD_HEIGHT - 70
+    draw.rectangle([(0, bar_y),(CARD_WIDTH, CARD_HEIGHT)], fill=cinema_color)
+    draw.text((40, bar_y+18), "@cinedrop", font=fonts["small"], fill=(255,255,255,140))
+    save_text = "save this"
+    s_w = draw.textbbox((0,0), save_text, font=fonts["small"])[2]
+    draw.text((CARD_WIDTH-s_w-40, bar_y+18), save_text, font=fonts["small"], fill=(255,255,255))
+
+    return _save_card(card, movie["id"])
+
+def render_b3(movie, streaming_platforms):
+    """Cinedrop score — full poster background darkened. Cinedrop custom score pill top right."""
+    fonts = _load_fonts()
+    poster_img = _get_card_background(movie)
+    cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
+    era_text, era_color, year = _get_era(movie)
+    rating  = round(movie.get("vote_average", 0), 1)
+    title   = movie.get("title", "Unknown")
+
+    # Background
+    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0,0,0))
+    card = Image.blend(bg, dark, alpha=0.4)
+    
+    # Log background source
+    bg_source = movie.get("_bg_source", "poster")
+    log_message(f"Background used in render_b3: {bg_source}")
+    
+    # Decorative element if mood color canvas
+    if movie.get("_bg_source") == "mood_color":
+        try:
+            emoji_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 380) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
+            card_temp = card.convert("RGBA")
+            draw_temp = ImageDraw.Draw(card_temp)
+            draw_temp.text((CARD_WIDTH//2 - 200, CARD_HEIGHT//2 - 250), "🎬", font=emoji_font, fill=(20,20,30,150))
+            card = card_temp.convert("RGB")
+        except:
+            pass
+
+    # Bottom gradient
+    grad = Image.new("RGBA", (CARD_WIDTH, 600), (0,0,0,0))
+    gd = ImageDraw.Draw(grad)
+    for i in range(600):
+        alpha = int((i/600) * 240)
+        gd.rectangle([(0,i),(CARD_WIDTH,i+1)], fill=(0,0,0,alpha))
+    card_rgba = card.convert("RGBA")
+    card_rgba.paste(grad, (0, CARD_HEIGHT-600), grad)
+    card = card_rgba.convert("RGB")
+
+    draw = ImageDraw.Draw(card)
+
+    # Top left — cinema badge
+    _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
+
+    # Top right — Cinedrop score box
+    cd_score = min(10.0, round(rating * 1.05, 1))  # slightly adjusted score
+    score_text = str(cd_score)
+    box_x, box_y = CARD_WIDTH-160, 40
+    draw.rounded_rectangle([(box_x, box_y),(box_x+120, box_y+110)],
+                           radius=12, fill=(0,0,0,180))
+    draw.rounded_rectangle([(box_x, box_y),(box_x+120, box_y+110)],
+                           radius=12, outline=(255,215,0), width=2)
+    # Score number
+    s_bbox = draw.textbbox((0,0), score_text, font=fonts["title"])
+    s_w = s_bbox[2]-s_bbox[0]
+    draw.text((box_x+(120-s_w)//2, box_y+10), score_text,
+              font=fonts["title"], fill=(255,215,0))
+    # Label
+    label = "CINEDROP"
+    l_bbox = draw.textbbox((0,0), label, font=fonts["tiny"])
+    l_w = l_bbox[2]-l_bbox[0]
+    draw.text((box_x+(120-l_w)//2, box_y+78), label,
+              font=fonts["tiny"], fill=(136,136,136))
+
+    # Bottom content
+    info_y = CARD_HEIGHT - 280
+    title_lines = _wrap_text(draw, title.upper(), fonts["title"], 1000)
+    for i, line in enumerate(title_lines[:2]):
+        draw.text((50, info_y + i*80), line, font=fonts["title"], fill=(255,255,255))
+
+    meta_y = info_y + len(title_lines[:2])*80 + 10
+    draw.text((50, meta_y), f"{rating}/10  \u00b7  {year}  \u00b7  {cinema_label}",
+              font=fonts["small"], fill=(160,160,160))
+
+    # Verdict pill
+    verdict = movie.get("_verdict", "MUST WATCH")
+    vdict_colors = {
+        "MUST WATCH": (229,9,20),
+        "SOLID PICK": (50,205,50),
+        "DECENT":     (255,103,0),
+        "SKIP":       (100,100,100),
+    }
+    v_color = vdict_colors.get(verdict, (229,9,20))
+    _draw_pill(draw, 50, meta_y+46, verdict, fonts["small"], v_color)
+
+    # Streaming
+    india_p = streaming_platforms.get("IN", [])[:2]
+    stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
+    draw.text((50, meta_y+110), stream_text, font=fonts["tiny"], fill=(120,120,120))
+
+    # Bottom bar
+    bar_y = CARD_HEIGHT - 70
+    draw.rectangle([(0,bar_y),(CARD_WIDTH,CARD_HEIGHT)], fill=(8,8,12))
+    draw.text((40, bar_y+18), "@cinedrop", font=fonts["small"], fill=(60,60,60))
+    save_text = "save this"
+    s_w = draw.textbbox((0,0), save_text, font=fonts["small"])[2]
+    draw.text((CARD_WIDTH-s_w-40, bar_y+18), save_text, font=fonts["small"], fill=(140,140,140))
+
+    return _save_card(card, movie["id"])
+
+def render_d1(movie, streaming_platforms):
+    """Minimal mood line — small poster centered top. Badges. Title. Big rating. One mood line."""
+    fonts = _load_fonts()
+    # Thumbnail always uses the real poster
+    thumb_img = _download_poster(movie.get("poster_path")) if movie.get("poster_path") else Image.new("RGB", (320, 460), (30,30,40))
+    cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
+    era_text, era_color, year = _get_era(movie)
+    rating = round(movie.get("vote_average", 0), 1)
+    title  = movie.get("title", "Unknown")
+    mood   = movie.get("_mood", "watch alone, lights off")
+
+    card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (8,8,8))
+    draw = ImageDraw.Draw(card)
+
+    # Top accent line
+    draw.rectangle([(0,0),(CARD_WIDTH,6)], fill=cinema_color)
+
+    # Dark top panel
+    draw.rectangle([(0,6),(CARD_WIDTH,520)], fill=(12,12,18))
+
+    # Poster thumbnail centered in top panel
+    THUMB_W, THUMB_H = 320, 460
+    thumb = thumb_img.copy().resize((THUMB_W, THUMB_H), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (THUMB_W, THUMB_H), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([(0,0),(THUMB_W,THUMB_H)], radius=16, fill=255)
+    thumb_rgba = thumb.convert("RGBA")
+    thumb_rgba.putalpha(mask)
+    card_rgba = card.convert("RGBA")
+    px = (CARD_WIDTH - THUMB_W)//2
+    card_rgba.paste(thumb_rgba, (px, 30), thumb_rgba)
+    card = card_rgba.convert("RGB")
+    draw = ImageDraw.Draw(card)
+
+    # Log background source (d1 always uses poster for thumbnail, but log it)
+    log_message(f"Background used in render_d1: poster (thumbnail only)")
+    
+    # Badges over thumbnail
+    bw, _ = _draw_pill(draw, 40, 20, cinema_label, fonts["small"], cinema_color)
+    _draw_pill(draw, 40+bw+12, 20, era_text, fonts["tiny"],
+               era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
+
+    # Divider
+    draw.rectangle([(0,520),(CARD_WIDTH,522)], fill=(20,20,20))
+
+    # Body section
+    body_y = 548
+    title_lines = _wrap_text(draw, title, fonts["large"], 980)
+    for i, line in enumerate(title_lines[:2]):
+        draw.text((54, body_y + i*62), line, font=fonts["large"], fill=(255,255,255))
+
+    year_y = body_y + len(title_lines[:2])*62 + 10
+    draw.text((54, year_y), f"{year}  \u00b7  {cinema_label}", font=fonts["body"], fill=(80,80,80))
+
+    # Big rating
+    rating_y = year_y + 50
+    rating_str = str(rating)
+    draw.text((54, rating_y), rating_str, font=fonts["title"], fill=(255,215,0))
+    r_w = draw.textbbox((0,0), rating_str, font=fonts["title"])[2]
+    draw.text((54+r_w+12, rating_y+22), "/10", font=fonts["body"], fill=(60,60,60))
+
+    # Mood line — italic feel, orange color
+    mood_y = rating_y + 100
+    draw.text((54, mood_y), f"\u2022 {mood}", font=fonts["body"], fill=cinema_color)
+
+    # Thin divider
+    div_y = mood_y + 52
+    draw.rectangle([(54, div_y),(CARD_WIDTH-54, div_y+1)], fill=(22,22,22))
+
+    # Streaming
+    india_p = streaming_platforms.get("IN", [])[:2]
+    stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
+    stream_y = div_y + 20
+    draw.text((54, stream_y), stream_text, font=fonts["small"], fill=(80,80,80))
+
+    # Bottom bar
+    bar_y = CARD_HEIGHT - 80
+    draw.rectangle([(0,bar_y),(CARD_WIDTH,CARD_HEIGHT)], fill=(5,5,5))
+    draw.rectangle([(0,bar_y),(CARD_WIDTH,bar_y+1)], fill=(18,18,18))
+    draw.text((54, bar_y+22), "@cinedrop", font=fonts["body"], fill=(40,40,40))
+    save_text = "save this"
+    s_w = draw.textbbox((0,0), save_text, font=fonts["body"])[2]
+    draw.text((CARD_WIDTH-s_w-54, bar_y+22), save_text, font=fonts["body"], fill=(80,80,80))
+
+    return _save_card(card, movie["id"])
+
+def render_d2(movie, streaming_platforms):
+    """Quote + colored bar — small poster top left. Badges. Quote mid-card. Title + meta below. Bold colored bottom bar."""
+    fonts = _load_fonts()
+    # Thumbnail always uses the real poster
+    thumb_img = _download_poster(movie.get("poster_path")) if movie.get("poster_path") else Image.new("RGB", (260, 380), (30,30,40))
+    cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
+    era_text, era_color, year = _get_era(movie)
+    rating   = round(movie.get("vote_average", 0), 1)
+    title    = movie.get("title", "Unknown")
+    dialogue = movie.get("_dialogue", "Some stories stay with you forever.")
+
+    card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (6,6,6))
+    draw = ImageDraw.Draw(card)
+
+    # Top section — dark panel
+    draw.rectangle([(0,0),(CARD_WIDTH,440)], fill=(10,10,14))
+
+    # Poster thumbnail top left
+    THUMB_W, THUMB_H = 260, 380
+    thumb = thumb_img.copy().resize((THUMB_W, THUMB_H), Image.Resampling.LANCZOS)
+    mask  = Image.new("L", (THUMB_W, THUMB_H), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([(0,0),(THUMB_W,THUMB_H)], radius=14, fill=255)
+    thumb_rgba = thumb.convert("RGBA")
+    thumb_rgba.putalpha(mask)
+    card_rgba = card.convert("RGBA")
+    card_rgba.paste(thumb_rgba, (54, 30), thumb_rgba)
+    card = card_rgba.convert("RGB")
+    draw = ImageDraw.Draw(card)
+
+    # Log background source (d2 always uses poster for thumbnail, but log it)
+    log_message(f"Background used in render_d2: poster (thumbnail only)")
+    
+    # Right of poster — movie info
+    info_x = 54 + THUMB_W + 36
+    _draw_pill(draw, info_x, 40, cinema_label, fonts["small"], cinema_color)
+    _draw_pill(draw, info_x, 96, era_text, fonts["tiny"],
+               era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
+    title_lines = _wrap_text(draw, title, fonts["medium"], 580-info_x)
+    ty = 148
+    for i, line in enumerate(title_lines[:3]):
+        draw.text((info_x, ty+i*50), line, font=fonts["medium"], fill=(255,255,255))
+    draw.text((info_x, ty+len(title_lines[:3])*50+8),
+              str(year), font=fonts["body"], fill=(70,70,70))
+
+    # Divider
+    draw.rectangle([(0,440),(CARD_WIDTH,442)], fill=(16,16,16))
+
+    # Quote section
+    quote_y = 470
+    # Accent vertical bar
+    draw.rectangle([(54, quote_y),(62, quote_y+300)], fill=cinema_color)
+    # Open quote mark
+    draw.text((76, quote_y-30), "\u201c", font=fonts["title"],
+              fill=(*cinema_color[:3],))
+    # Dialogue text wrapped
+    q_lines = _wrap_text(draw, dialogue, fonts["body"], 900)
+    for i, line in enumerate(q_lines[:5]):
+        draw.text((76, quote_y+50+i*48), line, font=fonts["body"],
+                  fill=(190,190,190))
+
+    # Thin divider before bottom bar
+    draw.rectangle([(0, CARD_HEIGHT-170),(CARD_WIDTH, CARD_HEIGHT-168)], fill=(16,16,16))
+
+    # Streaming line
+    india_p = streaming_platforms.get("IN", [])[:2]
+    stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
+    draw.text((54, CARD_HEIGHT-155), stream_text, font=fonts["small"], fill=(70,70,70))
+
+    # Bold colored bottom bar
+    draw.rectangle([(0,CARD_HEIGHT-100),(CARD_WIDTH,CARD_HEIGHT)], fill=cinema_color)
+    # Rating left
+    draw.text((54, CARD_HEIGHT-75), f"{rating}/10", font=fonts["large"], fill=(255,255,255))
+    # Handle right
+    handle = "@cinedrop"
+    h_w = draw.textbbox((0,0), handle, font=fonts["body"])[2]
+    draw.text((CARD_WIDTH-h_w-54, CARD_HEIGHT-68),
+              handle, font=fonts["body"], fill=(255,255,255,150))
+
+    return _save_card(card, movie["id"])
 
 
 def create_story_card(feed_card_path, movie, post_type):
@@ -1762,27 +1740,114 @@ def create_story_card(feed_card_path, movie, post_type):
 # STEP 5: CARD DISPATCHER & CAPTION BUILDER
 # ============================================================================
 
-def create_card(movie, content, streaming_platforms, post_type):
-    """Dispatch to the correct card rendering function based on post type."""
-    dispatch = {
-        "recommendation": lambda: render_recommendation(movie, content, streaming_platforms),
-        "hot_take": lambda: render_hot_take(movie, content),
-        "dialogue": lambda: render_dialogue(movie, content),
-        "mood_pick": lambda: render_mood_pick(movie, content, streaming_platforms),
-        "trivia": lambda: render_trivia(movie, content),
-        "list": lambda: render_list(movie, content),
-        "rating": lambda: render_rating(movie, content),
-    }
+def create_card(movie, streaming_platforms):
+    """
+    Dispatch to one of four card styles based on day of week.
+    B2 Mon/Sat — dialogue poster
+    B3 Tue/Fri — cinedrop score
+    D1 Wed/Sun — mood line minimal
+    D2 Thu     — quote + colored bar
+    """
+    try:
+        style = CARD_STYLE_BY_DAY.get(datetime.utcnow().weekday(), "b2")
+        log_message(f"Card style: {style}")
+
+        if not movie.get("poster_path"):
+            log_message("No poster path — skipping card", level="WARNING")
+            return None
+
+        if style == "b2": return render_b2(movie, streaming_platforms)
+        if style == "b3": return render_b3(movie, streaming_platforms)
+        if style == "d1": return render_d1(movie, streaming_platforms)
+        if style == "d2": return render_d2(movie, streaming_platforms)
+        return render_b2(movie, streaming_platforms)  # fallback
+
+    except Exception as e:
+        log_message(f"Card creation failed: {str(e)}", level="ERROR")
+        return None
+
+
+
+def add_caption_spice(caption, movie, post_type):
+    """
+    One tiny Groq call that appends 1-3 spicy words to the caption.
+    Never fails — returns original caption if anything goes wrong.
+    """
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        
+        title  = movie.get("title", "")
+        lang   = movie.get("original_language", "en")
+        genre  = movie.get("_genre_name", "Drama")
+        rating = round(movie.get("vote_average", 0), 1)
+        
+        prompt = f"""You are a 24 year old Indian who runs @cinedrop on Instagram.
+You just finished writing this caption and you cannot help yourself —
+you HAVE to add one last thing. It is compulsive. It is who you are.
+
+Caption you just wrote:
+{caption}
+
+Film: {title}
+Genre: {genre}
+Language: {lang}
+Rating: {rating}/10
+Post type: {post_type}
+
+Add 1 to 3 words at the very end. That is it.
+
+Be SPICY. Be unexpected. Make it sting a little.
+Could be aggressive. Could be emotional. Could be a gut punch.
+Could be Telugu, Hindi, or English — whatever hits hardest for this film.
+One emoji maximum if it makes it land harder.
+
+Do NOT be safe. Do NOT be generic. Do NOT explain yourself.
+Just say the thing. The thing nobody else would say but everyone is thinking.
+
+Output the words only. Nothing else."""
+        
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            max_tokens=20,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        suffix = resp.choices[0].message.content.strip()
+        
+        if not suffix or len(suffix) > 60:
+            return caption
+        if "\n" in suffix:
+            suffix = suffix.split("\n")[0].strip()
+        
+        # Insert suffix before hashtags if they exist
+        lines = caption.split("\n")
+        hashtag_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("#"):
+                hashtag_start = i
+                break
+        
+        if hashtag_start is not None:
+            lines.insert(hashtag_start, suffix)
+            lines.insert(hashtag_start, "")
+            result = "\n".join(lines)
+        else:
+            result = caption + "\n\n" + suffix
+        
+        log_message(f"Spice added: '{suffix}'")
+        return result
     
-    fn = dispatch.get(post_type, lambda: render_recommendation(movie, content, streaming_platforms))
-    return fn()
+    except Exception as e:
+        log_message(f"Caption spice skipped: {str(e)}", level="WARNING")
+        return caption
 
-
-def build_caption(content, post_type):
-    """Build Instagram caption from content and post type."""
+def build_caption(content, movie, post_type):
+    """Build Instagram caption from content and post type, with spice."""
     caption = content.get("caption", "")
     hashtags = content.get("hashtags", "")
-    return f"{caption}\n\n{hashtags}"
+    caption = f"{caption}\n\n{hashtags}"
+    caption = add_caption_spice(caption, movie, post_type)
+    return caption
 
 def upload_card_for_instagram(card_path):
     """
@@ -2062,7 +2127,12 @@ def main():
         content = generate_post_content(movie, streaming_platforms, post_type)
         content["hashtags"] = generate_hashtags(movie, post_type)
         
-        card_path = create_card(movie, content, streaming_platforms, post_type)
+        # Attach card fields to movie dict for render functions to access
+        movie["_dialogue"] = content.get("dialogue", "")
+        movie["_mood"] = content.get("mood_line", "")
+        movie["_verdict"] = content.get("verdict", "MUST WATCH")
+        
+        card_path = create_card(movie, streaming_platforms)
         if not card_path:
             log_message("Could not generate card. Exiting.", level="ERROR")
             return
@@ -2078,7 +2148,7 @@ def main():
         time.sleep(20)
         log_message("Image ready for Instagram publishing")
 
-        caption = build_caption(content, post_type)
+        caption = build_caption(content, movie, post_type)
         post_id = publish_to_instagram(public_image_url, caption)
 
         # Save history immediately after main post succeeds
