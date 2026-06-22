@@ -1,1 +1,13 @@
 tokengenerate.txt
+
+# Generated card images (temporary artifacts, hosted on GitHub CDN instead)
+cards/
+*.jpg
+*.jpeg
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+
