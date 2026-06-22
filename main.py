@@ -914,8 +914,16 @@ Tell people who should watch it — not generically, based on the actual story.
 Tell them when and how — be specific.
 One question at the end to start a fight in the comments.
 Mix Telugu/Hindi/English randomly — whatever feels right for this film.
-No hashtags. No emojis overload. Max 220 characters before the streaming line.
-Don't structure it. Don't format it. Just talk.
+No hashtags. No emojis overload.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
 """
             max_tokens = 400
 
@@ -932,7 +940,15 @@ Could be defending it or destroying it.
 Be aggressive. Be funny. Pick a side hard.
 Mix Telugu/Hindi/English. Sound like you're arguing with someone right now.
 End with something that will make people reply angrily or excitedly.
-Max 180 characters. No formatting. No hashtags.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
 """
             max_tokens = 400
 
@@ -947,7 +963,15 @@ If it's Hindi give in Hindi.
 If English give in English.
 Then one line — just one — saying why that line hits.
 Sound like you're sending this to a friend at 1am.
-No hashtags. No formatting. Don't explain the film.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
 """
             max_tokens = 400
 
@@ -964,8 +988,15 @@ Be hyper specific — "watch this when your situationship just went quiet"
 or "Sunday morning chai before everyone wakes up"
 or "when you need to cry but don't know why"
 or "boys trip, after dinner, non negotiable"
-Mix Telugu/Hindi/English freely.
-One question at the end. Max 200 characters. No formatting. No hashtags.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
 """
             max_tokens = 400
 
@@ -980,7 +1011,15 @@ Include a number — days, crores, years, something concrete.
 If you don't know a real fact make it feel real and specific.
 One sentence follow up reacting to the fact like a human would.
 Sound like you just found this out and had to tell someone.
-Mix Telugu/Hindi/English. Max 200 characters. No hashtags. No formatting.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
 """
             max_tokens = 400
 
@@ -994,6 +1033,16 @@ Mix Indian and Hollywood. Mix languages. Real films only.
 For each film: title, year, one word why.
 Then one aggressive line at the top introducing the list.
 Sound like you made this list at 2am because someone asked you.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
+
 Return as JSON only:
 {{
   "intro": "one aggressive intro line",
@@ -1019,6 +1068,16 @@ Rate this film honestly on these 4 things — score out of 10:
 Story, Performances, Rewatch value, Emotional hit
 Give a one word verdict: MASTERPIECE / SOLID / DECENT / SKIP
 Then one line verdict in Hinglish or Telugu — aggressive and honest.
+
+CAPTION LENGTH HARD LIMIT:
+- Maximum 150 characters total for the caption text (excluding hashtags)
+- If you write more than 150 characters you have failed
+- Count every character including spaces and emojis
+- No long sentences. No explanations. No descriptions.
+- Hook: max 8 words
+- Body: ONE sentence only. Not two. One.
+- That's it. Hook + one sentence + streaming + question. Done.
+
 Return as JSON only:
 {{
   "story": 0.0,
@@ -1103,14 +1162,18 @@ CARD_STYLE_BY_DAY = {
 
 def _load_fonts():
     """Load fonts with fallback to default."""
+    paths = {
+        "bold":    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "regular": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    }
     try:
         return {
-            "title":   ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 72),
-            "large":   ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 52),
-            "medium":  ImageFont.truetype(str(FONT_DIR / "BebasNeue-Regular.ttf"), 38),
-            "body":    ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 30),
-            "small":   ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 24),
-            "tiny":    ImageFont.truetype(str(FONT_DIR / "OpenSans-Regular.ttf"), 20),
+            "title":   ImageFont.truetype(paths["bold"],    110),  # was 72 — much bigger
+            "large":   ImageFont.truetype(paths["bold"],     72),  # was 52
+            "medium":  ImageFont.truetype(paths["bold"],     48),  # was 38
+            "body":    ImageFont.truetype(paths["regular"],  34),  # was 30
+            "small":   ImageFont.truetype(paths["regular"],  26),  # was 24
+            "tiny":    ImageFont.truetype(paths["regular"],  22),  # unchanged
         }
     except:
         d = ImageFont.load_default()
@@ -1282,14 +1345,14 @@ def render_b2(movie, streaming_platforms):
         except:
             pass
 
-    # Strong dark gradient bottom half for readability
-    grad = Image.new("RGBA", (CARD_WIDTH, 700), (0,0,0,0))
+    # Strong dark gradient bottom half for readability — 500px minimum
+    grad = Image.new("RGBA", (CARD_WIDTH, 500), (0, 0, 0, 0))
     gd = ImageDraw.Draw(grad)
-    for i in range(700):
-        alpha = int((i/700) * 230)
-        gd.rectangle([(0,i),(CARD_WIDTH,i+1)], fill=(0,0,0,alpha))
+    for i in range(500):
+        alpha = int((i / 500) * 245)
+        gd.rectangle([(0, i), (CARD_WIDTH, i+1)], fill=(0, 0, 0, alpha))
     card_rgba = card.convert("RGBA")
-    card_rgba.paste(grad, (0, CARD_HEIGHT-700), grad)
+    card_rgba.paste(grad, (0, CARD_HEIGHT - 500), grad)
     card = card_rgba.convert("RGB")
 
     draw = ImageDraw.Draw(card)
@@ -1313,19 +1376,41 @@ def render_b2(movie, streaming_platforms):
         draw.text((72, quote_y + 50 + i*44), line, font=fonts["body"],
                   fill=(220,220,220))
 
-    # Movie info bottom
-    info_y = CARD_HEIGHT - 200
-    title_lines = _wrap_text(draw, title.upper(), fonts["large"], 1000)
+    # Movie info bottom — massive centered title and rating
+    title_upper = title.upper()
+    title_lines = _wrap_text(draw, title_upper, fonts["title"], CARD_WIDTH - 80)
+    title_start_y = CARD_HEIGHT - 420
+    
     for i, line in enumerate(title_lines[:2]):
-        draw.text((50, info_y + i*62), line, font=fonts["large"], fill=(255,255,255))
-
-    meta_y = info_y + len(title_lines[:2])*62 + 8
-    draw.text((50, meta_y), f"{rating}/10  \u00b7  {year}", font=fonts["small"], fill=(255,215,0))
+        t_bbox = draw.textbbox((0, 0), line, font=fonts["title"])
+        t_w = t_bbox[2] - t_bbox[0]
+        t_x = (CARD_WIDTH - t_w) // 2  # centered
+        # Shadow for readability
+        draw.text((t_x + 3, title_start_y + i*90 + 3), line,
+                  font=fonts["title"], fill=(0, 0, 0))
+        # Main text
+        draw.text((t_x, title_start_y + i*90), line,
+                  font=fonts["title"], fill=(255, 255, 255))
+    
+    # Rating — very large, centered, gold
+    rating_str = f"⭐ {rating} / 10"
+    rating_y = title_start_y + len(title_lines[:2]) * 90 + 20
+    
+    r_bbox = draw.textbbox((0, 0), rating_str, font=fonts["large"])
+    r_w = r_bbox[2] - r_bbox[0]
+    r_x = (CARD_WIDTH - r_w) // 2  # centered
+    
+    # Shadow
+    draw.text((r_x + 2, rating_y + 2), rating_str,
+              font=fonts["large"], fill=(0, 0, 0))
+    # Main
+    draw.text((r_x, rating_y), rating_str,
+              font=fonts["large"], fill=(255, 215, 0))
 
     # Streaming
     india_p = streaming_platforms.get("IN", [])[:2]
     stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
-    draw.text((50, meta_y+38), f"Watch on: {stream_text}", font=fonts["tiny"], fill=(160,160,160))
+    draw.text((50, rating_y+80), f"Watch on: {stream_text}", font=fonts["tiny"], fill=(160,160,160))
 
     # Bottom bar
     bar_y = CARD_HEIGHT - 70
@@ -1366,14 +1451,14 @@ def render_b3(movie, streaming_platforms):
         except:
             pass
 
-    # Bottom gradient
-    grad = Image.new("RGBA", (CARD_WIDTH, 600), (0,0,0,0))
+    # Bottom gradient — 500px minimum
+    grad = Image.new("RGBA", (CARD_WIDTH, 500), (0, 0, 0, 0))
     gd = ImageDraw.Draw(grad)
-    for i in range(600):
-        alpha = int((i/600) * 240)
-        gd.rectangle([(0,i),(CARD_WIDTH,i+1)], fill=(0,0,0,alpha))
+    for i in range(500):
+        alpha = int((i / 500) * 245)
+        gd.rectangle([(0, i), (CARD_WIDTH, i+1)], fill=(0, 0, 0, alpha))
     card_rgba = card.convert("RGBA")
-    card_rgba.paste(grad, (0, CARD_HEIGHT-600), grad)
+    card_rgba.paste(grad, (0, CARD_HEIGHT - 500), grad)
     card = card_rgba.convert("RGB")
 
     draw = ImageDraw.Draw(card)
@@ -1401,15 +1486,36 @@ def render_b3(movie, streaming_platforms):
     draw.text((box_x+(120-l_w)//2, box_y+78), label,
               font=fonts["tiny"], fill=(136,136,136))
 
-    # Bottom content
-    info_y = CARD_HEIGHT - 280
-    title_lines = _wrap_text(draw, title.upper(), fonts["title"], 1000)
+    # Bottom content — massive centered title and rating
+    title_upper = title.upper()
+    title_lines = _wrap_text(draw, title_upper, fonts["title"], CARD_WIDTH - 80)
+    title_start_y = CARD_HEIGHT - 420
+    
     for i, line in enumerate(title_lines[:2]):
-        draw.text((50, info_y + i*80), line, font=fonts["title"], fill=(255,255,255))
-
-    meta_y = info_y + len(title_lines[:2])*80 + 10
-    draw.text((50, meta_y), f"{rating}/10  \u00b7  {year}  \u00b7  {cinema_label}",
-              font=fonts["small"], fill=(160,160,160))
+        t_bbox = draw.textbbox((0, 0), line, font=fonts["title"])
+        t_w = t_bbox[2] - t_bbox[0]
+        t_x = (CARD_WIDTH - t_w) // 2  # centered
+        # Shadow for readability
+        draw.text((t_x + 3, title_start_y + i*90 + 3), line,
+                  font=fonts["title"], fill=(0, 0, 0))
+        # Main text
+        draw.text((t_x, title_start_y + i*90), line,
+                  font=fonts["title"], fill=(255, 255, 255))
+    
+    # Rating — very large, centered, gold
+    rating_str = f"⭐ {rating} / 10"
+    rating_y = title_start_y + len(title_lines[:2]) * 90 + 20
+    
+    r_bbox = draw.textbbox((0, 0), rating_str, font=fonts["large"])
+    r_w = r_bbox[2] - r_bbox[0]
+    r_x = (CARD_WIDTH - r_w) // 2  # centered
+    
+    # Shadow
+    draw.text((r_x + 2, rating_y + 2), rating_str,
+              font=fonts["large"], fill=(0, 0, 0))
+    # Main
+    draw.text((r_x, rating_y), rating_str,
+              font=fonts["large"], fill=(255, 215, 0))
 
     # Verdict pill
     verdict = movie.get("_verdict", "MUST WATCH")
@@ -1420,12 +1526,12 @@ def render_b3(movie, streaming_platforms):
         "SKIP":       (100,100,100),
     }
     v_color = vdict_colors.get(verdict, (229,9,20))
-    _draw_pill(draw, 50, meta_y+46, verdict, fonts["small"], v_color)
+    _draw_pill(draw, 50, rating_y+80, verdict, fonts["small"], v_color)
 
     # Streaming
     india_p = streaming_platforms.get("IN", [])[:2]
     stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
-    draw.text((50, meta_y+110), stream_text, font=fonts["tiny"], fill=(120,120,120))
+    draw.text((50, rating_y+140), stream_text, font=fonts["tiny"], fill=(120,120,120))
 
     # Bottom bar
     bar_y = CARD_HEIGHT - 70
@@ -1481,21 +1587,39 @@ def render_d1(movie, streaming_platforms):
     # Divider
     draw.rectangle([(0,520),(CARD_WIDTH,522)], fill=(20,20,20))
 
-    # Body section
+    # Body section — massive centered title
     body_y = 548
-    title_lines = _wrap_text(draw, title, fonts["large"], 980)
+    title_upper = title.upper()
+    title_lines = _wrap_text(draw, title_upper, fonts["title"], CARD_WIDTH - 80)
+    title_start_y = body_y + 40
+    
     for i, line in enumerate(title_lines[:2]):
-        draw.text((54, body_y + i*62), line, font=fonts["large"], fill=(255,255,255))
+        t_bbox = draw.textbbox((0, 0), line, font=fonts["title"])
+        t_w = t_bbox[2] - t_bbox[0]
+        t_x = (CARD_WIDTH - t_w) // 2  # centered
+        # Shadow for readability
+        draw.text((t_x + 3, title_start_y + i*90 + 3), line,
+                  font=fonts["title"], fill=(0, 0, 0))
+        # Main text
+        draw.text((t_x, title_start_y + i*90), line,
+                  font=fonts["title"], fill=(255, 255, 255))
 
-    year_y = body_y + len(title_lines[:2])*62 + 10
-    draw.text((54, year_y), f"{year}  \u00b7  {cinema_label}", font=fonts["body"], fill=(80,80,80))
+    # Giant standalone rating — takes up its own visual zone
+    rating_y = title_start_y + len(title_lines[:2]) * 90 + 40
+    rating_solo = str(rating)
+    rs_bbox = draw.textbbox((0, 0), rating_solo, font=fonts["title"])
+    rs_w = rs_bbox[2] - rs_bbox[0]
+    rs_x = (CARD_WIDTH - rs_w) // 2
+    draw.text((rs_x + 3, rating_y + 3), rating_solo,
+              font=fonts["title"], fill=(0, 0, 0))
+    draw.text((rs_x, rating_y), rating_solo,
+              font=fonts["title"], fill=(255, 215, 0))
 
-    # Big rating
-    rating_y = year_y + 50
-    rating_str = str(rating)
-    draw.text((54, rating_y), rating_str, font=fonts["title"], fill=(255,215,0))
-    r_w = draw.textbbox((0,0), rating_str, font=fonts["title"])[2]
-    draw.text((54+r_w+12, rating_y+22), "/10", font=fonts["body"], fill=(60,60,60))
+    # "/10" smaller, right-aligned next to rating
+    sub_text = "/10"
+    sub_bbox = draw.textbbox((0, 0), sub_text, font=fonts["medium"])
+    draw.text((rs_x + rs_w + 10, rating_y + 48), sub_text,
+              font=fonts["medium"], fill=(80, 80, 80))
 
     # Mood line — italic feel, orange color
     mood_y = rating_y + 100
@@ -1590,10 +1714,25 @@ def render_d2(movie, streaming_platforms):
     stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
     draw.text((54, CARD_HEIGHT-155), stream_text, font=fonts["small"], fill=(70,70,70))
 
-    # Bold colored bottom bar
+    # Bold colored bottom bar with giant centered rating and handle
     draw.rectangle([(0,CARD_HEIGHT-100),(CARD_WIDTH,CARD_HEIGHT)], fill=cinema_color)
-    # Rating left
-    draw.text((54, CARD_HEIGHT-75), f"{rating}/10", font=fonts["large"], fill=(255,255,255))
+    
+    # Giant standalone rating — left side
+    rating_solo = str(rating)
+    rs_bbox = draw.textbbox((0, 0), rating_solo, font=fonts["title"])
+    rs_w = rs_bbox[2] - rs_bbox[0]
+    rs_x = 54
+    draw.text((rs_x + 3, CARD_HEIGHT - 75 + 3), rating_solo,
+              font=fonts["title"], fill=(0, 0, 0))
+    draw.text((rs_x, CARD_HEIGHT - 75), rating_solo,
+              font=fonts["title"], fill=(255, 255, 255))
+    
+    # "/10" smaller, right next to rating
+    sub_text = "/10"
+    sub_bbox = draw.textbbox((0, 0), sub_text, font=fonts["medium"])
+    draw.text((rs_x + rs_w + 10, CARD_HEIGHT - 52), sub_text,
+              font=fonts["medium"], fill=(220, 220, 220))
+    
     # Handle right
     handle = "@cinedrop"
     h_w = draw.textbbox((0,0), handle, font=fonts["body"])[2]
@@ -1849,6 +1988,36 @@ def build_caption(content, movie, post_type):
     hashtags = content.get("hashtags", "")
     caption = f"{caption}\n\n{hashtags}"
     caption = add_caption_spice(caption, movie, post_type)
+    
+    # Hard enforce caption length — strip everything past 150 chars before hashtags
+    lines = caption.split("\n")
+    caption_lines = []
+    hashtag_lines = []
+    in_hashtags = False
+
+    for line in lines:
+        if line.strip().startswith("#"):
+            in_hashtags = True
+        if in_hashtags:
+            hashtag_lines.append(line)
+        else:
+            caption_lines.append(line)
+
+    # Join caption body and enforce 150 char limit
+    caption_body = "\n".join(caption_lines).strip()
+    if len(caption_body) > 300:
+        # Keep only up to the 3rd newline — hook + one line + streaming
+        short_lines = [l for l in caption_lines if l.strip()][:4]
+        caption_body = "\n".join(short_lines)
+
+    hashtag_body = "\n".join(hashtag_lines).strip()
+
+    if hashtag_body:
+        caption = f"{caption_body}\n\n{hashtag_body}"
+    else:
+        caption = caption_body
+
+    log_message(f"Final caption length: {len(caption_body)} chars")
     return caption
 
 def upload_card_for_instagram(card_path):
