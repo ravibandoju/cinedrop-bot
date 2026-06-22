@@ -1784,44 +1784,35 @@ def build_caption(content, post_type):
     hashtags = content.get("hashtags", "")
     return f"{caption}\n\n{hashtags}"
 
-def upload_card_to_github(card_path):
-    """Commit and push the card image to GitHub for public hosting."""
+def upload_card_for_instagram(card_path):
+    """
+    Upload card image to Telegra.ph for public hosting.
+    No API key or account needed — completely anonymous.
+    Instagram accepts Telegra.ph URLs without issues.
+    """
     try:
-        repo = os.getenv("GITHUB_REPOSITORY")
-        if not repo:
-            try:
-                import subprocess
-                remote = subprocess.check_output(
-                    ["git", "config", "--get", "remote.origin.url"],
-                    text=True,
-                ).strip()
-                remote = remote.replace("git@github.com:", "").replace(
-                    "https://github.com/", ""
-                )
-                repo = remote[:-4] if remote.endswith(".git") else remote
-            except Exception:
-                repo = None
+        log_message(f"Uploading to Telegra.ph: {card_path}")
 
-        if not repo:
-            log_message("Could not determine GitHub repository - cannot host image", level="ERROR")
-            return None
+        with open(card_path, "rb") as f:
+            files = {"file": (Path(card_path).name, f, "image/jpeg")}
+            resp = requests.post(
+                "https://telegra.ph/upload",
+                files=files,
+                timeout=30
+            )
+            resp.raise_for_status()
+            result = resp.json()
 
-        branch = os.getenv("GITHUB_REF_NAME", "main")
-
-        log_message(f"Pushing card image to GitHub ({repo}@{branch}) for public hosting...")
-
-        os.system(f'git add "{card_path}"')
-        os.system('git commit -m "Auto: Add daily movie card image" || echo "nothing to commit"')
-        push_result = os.system("git push")
-        if push_result != 0:
-            log_message("git push for card image returned non-zero status", level="WARNING")
-
-        public_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{card_path}".replace("\\", "/")
-        log_message(f"Card image hosted at: {public_url}")
-        return public_url
+            if isinstance(result, list) and result[0].get("src"):
+                url = f"https://telegra.ph{result[0]['src']}"
+                log_message(f"Telegra.ph upload successful: {url}")
+                return url
+            else:
+                log_message(f"Telegra.ph unexpected response: {result}", level="ERROR")
+                return None
 
     except Exception as e:
-        log_message(f"Error hosting card image on GitHub: {str(e)}", level="ERROR")
+        log_message(f"Telegra.ph upload failed: {str(e)}", level="ERROR")
         return None
 
 
@@ -2053,13 +2044,14 @@ def main():
             log_message("Could not generate card. Exiting.", level="ERROR")
             return
 
-        public_image_url = upload_card_to_github(card_path)
+        # Upload to Telegra.ph for Instagram publishing
+        public_image_url = upload_card_for_instagram(card_path)
         if not public_image_url:
-            log_message("Could not host image publicly. Exiting.", level="ERROR")
+            log_message("Image upload failed. Exiting.", level="ERROR")
             return
 
-        log_message("Waiting for image to propagate on GitHub CDN...")
-        time.sleep(10)
+        # No CDN wait needed — Telegra.ph URLs are immediately live
+        log_message("Image ready for Instagram publishing")
 
         caption = build_caption(content, post_type)
         post_id = publish_to_instagram(public_image_url, caption)
@@ -2084,15 +2076,11 @@ def main():
             story_card_path = create_story_card(card_path, movie, post_type)
 
             if story_card_path:
-                # Upload story card to GitHub for public hosting
-                story_public_url = upload_card_to_github(story_card_path)
+                # Upload story card to Telegra.ph for public hosting
+                story_public_url = upload_card_for_instagram(story_card_path)
 
                 if story_public_url:
-                    # Wait for CDN propagation
-                    log_message("Waiting for story image CDN propagation...")
-                    time.sleep(12)
-
-                    # Publish story
+                    # Publish story immediately — Telegra.ph URLs are ready instantly
                     story_id = publish_to_story(story_public_url)
 
                     if story_id:
