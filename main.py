@@ -1804,11 +1804,13 @@ One emoji maximum if it makes it land harder.
 Do NOT be safe. Do NOT be generic. Do NOT explain yourself.
 Just say the thing. The thing nobody else would say but everyone is thinking.
 
-Output the words only. Nothing else."""
+Output the words only. Nothing else.
+
+HARD LIMIT: 3 words maximum. Not 4. Not a sentence. 3 words."""
         
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            max_tokens=20,
+            max_tokens=8,
             messages=[{"role": "user", "content": prompt}]
         )
         
