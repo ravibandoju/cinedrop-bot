@@ -1786,96 +1786,57 @@ def build_caption(content, post_type):
 
 def upload_card_for_instagram(card_path):
     """
-    Upload card image to a public host that Instagram accepts.
-    Tries three methods in sequence — all free, no API key needed.
+    Upload card image to GitHub via the Contents API.
+    Uses the same GH_TOKEN already working for history.
+    Returns a raw.githubusercontent.com URL that Instagram accepts.
     """
-
-    # METHOD 1 — Compress image first to ensure it's under size limits
-    # then try Telegra.ph with correct multipart format
     try:
-        log_message(f"Compressing card for upload...")
+        repo   = os.getenv("GITHUB_REPOSITORY", "ravibandoju/cinedrop-bot")
+        branch = os.getenv("GITHUB_REF_NAME", "main")
+        token  = os.getenv("GH_TOKEN") or os.getenv("HISTORY_REPO_TOKEN")
 
-        # Open and recompress at lower quality to reduce file size
-        img = Image.open(card_path)
-        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
-        img.save(compressed_path, "JPEG", quality=75, optimize=True)
+        if not token:
+            log_message("GH_TOKEN not set — cannot upload card", level="ERROR")
+            return None
 
-        file_size = Path(compressed_path).stat().st_size
-        log_message(f"Compressed size: {file_size / 1024:.0f} KB")
+        with open(card_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        log_message("Trying Telegra.ph upload...")
-        with open(compressed_path, "rb") as f:
-            resp = requests.post(
-                "https://telegra.ph/upload",
-                files={"file": ("image.jpg", f, "image/jpeg")},
-                timeout=30
-            )
+        file_path = str(card_path).replace("\\", "/")
+        api_url   = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+        headers   = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
-            if resp.status_code == 200:
-                result = resp.json()
-                if isinstance(result, list) and len(result) > 0 and result[0].get("src"):
-                    url = f"https://telegra.ph{result[0]['src']}"
-                    log_message(f"Telegra.ph upload successful: {url}")
-                    return url
+        # Check if file already exists — need SHA to update existing file
+        existing_sha = None
+        check = requests.get(api_url, headers=headers, timeout=10)
+        if check.status_code == 200:
+            existing_sha = check.json().get("sha")
 
-            log_message(f"Telegra.ph returned: {resp.status_code} {resp.text}", level="WARNING")
+        body = {
+            "message": f"Auto: card {datetime.utcnow().strftime('%Y-%m-%d')}",
+            "content": image_b64,
+            "branch":  branch,
+        }
+        if existing_sha:
+            body["sha"] = existing_sha
+
+        resp = requests.put(api_url, headers=headers, json=body, timeout=30)
+
+        if resp.status_code in (200, 201):
+            public_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{file_path}"
+            log_message(f"Card uploaded successfully: {public_url}")
+            return public_url
+        else:
+            log_message(f"GitHub Contents API failed: {resp.status_code} {resp.text}", level="ERROR")
+            return None
 
     except Exception as e:
-        log_message(f"Telegra.ph failed: {str(e)}", level="WARNING")
-
-    # METHOD 2 — catbox.moe (completely free, no account, 200MB limit)
-    try:
-        log_message("Trying catbox.moe upload...")
-        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
-        if not Path(compressed_path).exists():
-            img = Image.open(card_path)
-            img.save(compressed_path, "JPEG", quality=75, optimize=True)
-
-        with open(compressed_path, "rb") as f:
-            resp = requests.post(
-                "https://catbox.moe/user/api.php",
-                data={"reqtype": "fileupload"},
-                files={"fileToUpload": ("image.jpg", f, "image/jpeg")},
-                timeout=30
-            )
-
-            if resp.status_code == 200 and resp.text.startswith("https://"):
-                url = resp.text.strip()
-                log_message(f"Catbox.moe upload successful: {url}")
-                return url
-
-            log_message(f"Catbox.moe returned: {resp.status_code} {resp.text}", level="WARNING")
-
-    except Exception as e:
-        log_message(f"Catbox.moe failed: {str(e)}", level="WARNING")
-
-    # METHOD 3 — 0x0.st (minimalist free host, no account, 512MB limit)
-    try:
-        log_message("Trying 0x0.st upload...")
-        compressed_path = card_path.replace(".jpg", "_compressed.jpg")
-        if not Path(compressed_path).exists():
-            img = Image.open(card_path)
-            img.save(compressed_path, "JPEG", quality=75, optimize=True)
-
-        with open(compressed_path, "rb") as f:
-            resp = requests.post(
-                "https://0x0.st",
-                files={"file": ("image.jpg", f, "image/jpeg")},
-                timeout=30
-            )
-
-            if resp.status_code == 200 and resp.text.startswith("https://"):
-                url = resp.text.strip()
-                log_message(f"0x0.st upload successful: {url}")
-                return url
-
-            log_message(f"0x0.st returned: {resp.status_code} {resp.text}", level="WARNING")
-
-    except Exception as e:
-        log_message(f"0x0.st failed: {str(e)}", level="WARNING")
-
-    log_message("All upload methods failed.", level="ERROR")
-    return None
+        log_message(f"Card upload error: {str(e)}", level="ERROR")
+        return None
 
 
 def publish_to_instagram(image_url, caption):
@@ -2106,13 +2067,15 @@ def main():
             log_message("Could not generate card. Exiting.", level="ERROR")
             return
 
-        # Upload to Telegra.ph for Instagram publishing
+        # Upload to GitHub via Contents API for Instagram publishing
         public_image_url = upload_card_for_instagram(card_path)
         if not public_image_url:
             log_message("Image upload failed. Exiting.", level="ERROR")
             return
 
-        # No CDN wait needed — Telegra.ph URLs are immediately live
+        # Wait for GitHub CDN to serve the image
+        log_message("Waiting for GitHub CDN to serve the image...")
+        time.sleep(20)
         log_message("Image ready for Instagram publishing")
 
         caption = build_caption(content, post_type)
@@ -2120,14 +2083,6 @@ def main():
 
         # Save history immediately after main post succeeds
         save_history(movie, card_path=card_path)
-
-        # Clean up compressed upload files
-        for pattern in ["_compressed.jpg"]:
-            for f in Path("cards").glob(f"*{pattern}"):
-                try:
-                    f.unlink()
-                except:
-                    pass
 
         # --- STORY STRATEGY ---
         # Posting a Story immediately after a feed post does two things:
@@ -2146,11 +2101,11 @@ def main():
             story_card_path = create_story_card(card_path, movie, post_type)
 
             if story_card_path:
-                # Upload story card to Telegra.ph for public hosting
+                # Upload story card to GitHub via Contents API for public hosting
                 story_public_url = upload_card_for_instagram(story_card_path)
 
                 if story_public_url:
-                    # Publish story immediately — Telegra.ph URLs are ready instantly
+                    # Publish story immediately after feed post succeeds
                     story_id = publish_to_story(story_public_url)
 
                     if story_id:
