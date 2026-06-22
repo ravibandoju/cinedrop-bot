@@ -1822,46 +1822,32 @@ def create_story_card(feed_card_path, movie, post_type):
             fill=COLOR_SAFFRON
         )
 
-        # Bottom swipe prompt area
-        bottom_y = STORY_HEIGHT - 200
+        # CTA lines — tell people where to go
+        cta_lines = [
+            "full post on our page",
+            "@cinedrop.01 👆"
+        ]
 
-        # Dark pill background for bottom area
+        cta_y = STORY_HEIGHT - 220
+
+        # Dark pill background
         draw.rounded_rectangle(
-            [(60, bottom_y - 20), (STORY_WIDTH - 60, STORY_HEIGHT - 60)],
+            [(60, cta_y - 20), (STORY_WIDTH - 60, STORY_HEIGHT - 60)],
             radius=30,
-            fill=(0, 0, 0, 180)
+            fill=(0, 0, 0, 200)
         )
 
-        # Main CTA
-        cta_texts = {
-            "recommendation": "check the post for full details",
-            "hot_take": "drop your take in the post 👊",
-            "dialogue": "share this with someone 🤙",
-            "mood_pick": "tag someone who needs this 🌙",
-            "trivia": "bet you didn't know this 👀",
-            "list": "save the post for later 🔖",
-            "rating": "agree with our rating? 🎯",
-        }
-        cta = cta_texts.get(post_type, "check the post 👆")
-
-        cta_bbox = draw.textbbox((0, 0), cta, font=font_medium)
-        cta_w = cta_bbox[2] - cta_bbox[0]
-        draw.text(
-            ((STORY_WIDTH - cta_w) // 2, bottom_y),
-            cta,
-            font=font_medium,
-            fill=COLOR_WHITE
-        )
-
-        # Handle
-        handle_bbox = draw.textbbox((0, 0), "@cinedrop", font=font_small)
-        handle_w = handle_bbox[2] - handle_bbox[0]
-        draw.text(
-            ((STORY_WIDTH - handle_w) // 2, bottom_y + 55),
-            "@cinedrop",
-            font=font_small,
-            fill=COLOR_GRAY
-        )
+        for i, line in enumerate(cta_lines):
+            font = font_medium if i == 0 else font_large
+            color = (180, 180, 180) if i == 0 else COLOR_SAFFRON
+            bbox = draw.textbbox((0, 0), line, font=font)
+            line_w = bbox[2] - bbox[0]
+            draw.text(
+                ((STORY_WIDTH - line_w) // 2, cta_y + i * 60),
+                line,
+                font=font,
+                fill=color
+            )
 
         # Save story card
         CARDS_DIR.mkdir(exist_ok=True)
@@ -2148,6 +2134,7 @@ def publish_to_story(image_url):
             "image_url": image_url,
             "media_type": "STORIES",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
+            "link": "https://www.instagram.com/cinedrop.01/",
         }
 
         container_resp = requests.post(
