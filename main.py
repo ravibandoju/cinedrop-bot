@@ -705,7 +705,11 @@ def get_movie():
 
         LANGUAGE_GROUPS = [
             {"langs": "en", "type": "Hollywood"},
-            {"langs": "hi|ta|te|ml|kn", "type": "Indian"},
+            {"langs": "hi", "type": "Bollywood"},
+            {"langs": "ta", "type": "Kollywood"},
+            {"langs": "te", "type": "Tollywood"},
+            {"langs": "ml", "type": "Mollywood"},
+            {"langs": "kn", "type": "Sandalwood"},
         ]
 
         all_movies = []
@@ -742,11 +746,36 @@ def get_movie():
                     for movie in movies:
                         movie["_era"] = era_label
                         movie["_cinema_type"] = cinema_type
+                        movie["_language"] = lang_group["langs"]
                     
                     all_movies.extend(movies)
                     log_message(f"  {era_label.capitalize()} {cinema_type}: Found {len(movies)} films")
                 except Exception as e:
                     log_message(f"  {era_label.capitalize()} {cinema_type}: {str(e)}", level="WARNING")
+
+        # Dedicated trending calls per regional language to boost variety
+        REGIONAL_LANGS = [("ta","Kollywood"),("te","Tollywood"),("ml","Mollywood"),("kn","Sandalwood")]
+        for lang, cinema in REGIONAL_LANGS:
+            try:
+                r = requests.get(
+                    f"{TMDB_BASE_URL}/discover/movie",
+                    params={
+                        "api_key": TMDB_API_KEY, "with_original_language": lang,
+                        "vote_average.gte": 7.0, "vote_count.gte": 50,
+                        "sort_by": "popularity.desc", "language": "en-US",
+                        "primary_release_date.gte": "2010-01-01", "page": 1,
+                    },
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    for m in r.json().get("results", [])[:10]:
+                        m["_era"] = "recent"
+                        m["_cinema_type"] = cinema
+                        m["_language"] = lang
+                        all_movies.append(m)
+                    log_message(f"  {cinema} boost: +{len(r.json().get('results',[])[:10])} films")
+            except Exception as e:
+                log_message(f"{cinema} boost failed: {e}", level="WARNING")
 
         # Add India daily trending movies to boost relevance
         try:
@@ -760,8 +789,10 @@ def get_movie():
                 trending_movies = trend_resp.json().get("results", [])[:12]
                 for m in trending_movies:
                     lang = m.get("original_language", "en")
+                    cinema_map = {"hi":"Bollywood","ta":"Kollywood","te":"Tollywood","ml":"Mollywood","kn":"Sandalwood"}
                     m["_era"] = "recent"
-                    m["_cinema_type"] = "Indian" if lang in ["hi","ta","te","ml","kn"] else "Hollywood"
+                    m["_cinema_type"] = cinema_map.get(lang, "Hollywood")
+                    m["_language"] = lang
                 all_movies.extend(trending_movies)
                 log_message(f"  India trending: added {len(trending_movies)} movies to pool")
         except Exception as e:
@@ -775,10 +806,12 @@ def get_movie():
                 seen_ids.add(m["id"])
                 unique_movies.append(m)
 
-        # Count by type
-        indian_count = sum(1 for m in unique_movies if m.get("_cinema_type") == "Indian")
+        indian_count = sum(1 for m in unique_movies if m.get("_cinema_type") not in ("Hollywood", None))
         hollywood_count = sum(1 for m in unique_movies if m.get("_cinema_type") == "Hollywood")
         log_message(f"Merged pool: {len(unique_movies)} unique films ({indian_count} Indian, {hollywood_count} Hollywood)")
+        for cinema in ["Bollywood","Kollywood","Tollywood","Mollywood","Sandalwood"]:
+            n = sum(1 for m in unique_movies if m.get("_cinema_type") == cinema)
+            if n: log_message(f"  {cinema}: {n}")
 
         if not unique_movies:
             log_message(f"No movies found for {today_genre['name']}", level="WARNING")
@@ -788,7 +821,8 @@ def get_movie():
         random.shuffle(unique_movies)
 
         # Split into unposted pools — prefer Indian content (target audience is India)
-        unposted_indian = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Indian"]
+        INDIAN_TYPES = {"Bollywood", "Kollywood", "Tollywood", "Mollywood", "Sandalwood"}
+        unposted_indian = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in INDIAN_TYPES]
         unposted_hollywood = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Hollywood"]
 
         log_message(f"Unposted pool: {len(unposted_indian)} Indian, {len(unposted_hollywood)} Hollywood")
@@ -1348,10 +1382,8 @@ def render_b2(movie, streaming_platforms):
 
     draw = ImageDraw.Draw(card)
 
-    # Top badges
-    _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
-    cinema_w = draw.textbbox((0,0), cinema_label, font=fonts["small"])[2] + 54
-    _draw_pill(draw, 40 + cinema_w + 12, 50, era_text, fonts["tiny"],
+    # Top badges — era only
+    _draw_pill(draw, 40, 50, era_text, fonts["tiny"],
                era_color, (0,0,0) if era_color == (212,175,55) else (255,255,255))
 
     # Dialogue quote — center of card
@@ -1454,8 +1486,9 @@ def render_b3(movie, streaming_platforms):
 
     draw = ImageDraw.Draw(card)
 
-    # Top left — cinema badge
-    _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
+    # Top left — era badge only
+    _draw_pill(draw, 40, 50, era_text, fonts["tiny"],
+               era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
 
     # Top right — Cinedrop score box
     cd_score = min(10.0, round(rating * 1.05, 1))  # slightly adjusted score
@@ -1572,9 +1605,8 @@ def render_d1(movie, streaming_platforms):
     draw = ImageDraw.Draw(card)
     log_message(f"Background used in render_d1: {movie.get('_bg_source', 'poster')}")
 
-    # Top badges
-    bw, _ = _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
-    _draw_pill(draw, 40 + bw + 12, 50, era_text, fonts["tiny"],
+    # Top badges — era only
+    _draw_pill(draw, 40, 50, era_text, fonts["tiny"],
                era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
 
     # Bottom zone — massive centered title
@@ -1646,10 +1678,8 @@ def render_d2(movie, streaming_platforms):
     log_message(f"Background used in render_d2: {movie.get('_bg_source', 'poster')} (blurred)")
     draw = ImageDraw.Draw(card)
 
-    # Top: cinema badge, era badge
-    _draw_pill(draw, 54, 54, cinema_label, fonts["small"], cinema_color)
-    cinema_pill_w = draw.textbbox((0, 0), cinema_label, font=fonts["small"])[2] + 36 + 54
-    _draw_pill(draw, cinema_pill_w, 54, era_text, fonts["tiny"],
+    # Top: era badge only
+    _draw_pill(draw, 54, 54, era_text, fonts["tiny"],
                era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
 
     # Title and year below badges
