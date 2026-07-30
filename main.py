@@ -141,15 +141,17 @@ POST_TYPE_BY_DAY = {
 
 # Streaming provider IDs (corrected mapping)
 PROVIDER_MAPPING = {
-    8: "Netflix",
-    119: "Amazon Prime Video",
-    35: "Apple TV+",
-    122: "Disney+ Hotstar",
+    8:   "Netflix",
+    119: "Prime Video",
+    35:  "Apple TV+",
+    122: "JioHotstar",
     232: "Zee5",
     237: "SonyLIV",
     892: "JioCinema",
     190: "Mubi",
-    15: "Hulu",
+    532: "Aha",
+    561: "Lionsgate Play",
+    15:  "Hulu",
     384: "Max",
     387: "Peacock",
     531: "Paramount+",
@@ -2002,7 +2004,7 @@ def upload_card_for_instagram(card_path):
     """
     Upload card image to GitHub via the Contents API.
     Uses the same GH_TOKEN already working for history.
-    Returns a raw.githubusercontent.com URL that Instagram accepts.
+    Returns a jsDelivr CDN URL — more reliable than raw.githubusercontent.com for Instagram.
     """
     try:
         repo   = HISTORY_REPO  # public state repo hosts cards so bot repo stays clean
@@ -2041,7 +2043,9 @@ def upload_card_for_instagram(card_path):
         resp = requests.put(api_url, headers=headers, json=body, timeout=30)
 
         if resp.status_code in (200, 201):
-            public_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{file_path}"
+            # jsDelivr serves GitHub content via a CDN that Instagram accepts
+            commit_sha = resp.json().get("commit", {}).get("sha", branch)
+            public_url = f"https://cdn.jsdelivr.net/gh/{repo}@{commit_sha}/{file_path}"
             log_message(f"Card uploaded successfully: {public_url}")
             return public_url
         else:
@@ -2428,13 +2432,13 @@ def _search_ott_web() -> list[dict]:
         log_message("duckduckgo-search not installed; skipping web OTT pass", level="WARNING")
         return []
 
-    month_year = datetime.utcnow().strftime("%B %Y")
+    week = datetime.utcnow().strftime("%B %d %Y")
     queries = [
-        f"new movies Netflix India {month_year}",
-        f"new movies Amazon Prime Video India {month_year}",
-        f"new Bollywood Hindi Tamil Telugu OTT release {month_year}",
-        f"new movies Disney Hotstar JioCinema India {month_year}",
-        f"OTT releases India this week {month_year}",
+        f"new movies Netflix India this week {week}",
+        f"new movies Prime Video Hotstar India this week {week}",
+        f"new Bollywood Hindi Tamil Telugu OTT release this week {week}",
+        f"new Korean movies OTT India this week {week}",
+        f"SonyLIV Zee5 JioCinema Aha new movie release this week {week}",
     ]
 
     snippets = []
@@ -2464,7 +2468,7 @@ def _search_ott_web() -> list[dict]:
 
 Extract ONLY movies (not TV series/shows) that are confirmed new arrivals on Indian OTT platforms.
 Return ONLY a valid JSON array, nothing else:
-[{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|Hotstar|ZEE5|JioCinema|SonyLIV", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|English"}}]
+[{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|JioHotstar|ZEE5|JioCinema|SonyLIV|Aha|Lionsgate Play|Apple TV+", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|Korean|English"}}]
 
 Rules:
 - Only include films explicitly mentioned in the snippets above
@@ -2510,8 +2514,8 @@ def get_new_ott_releases():
     if not TMDB_API_KEY:
         raise ValueError("TMDB_API_KEY not set")
 
-    INDIA_PROVIDERS = "8|119|122|237|232|892|190"
-    LANG_CODE = {"Hindi":"hi","Tamil":"ta","Telugu":"te","Malayalam":"ml","Kannada":"kn","English":"en"}
+    INDIA_PROVIDERS = "8|119|122|237|232|892|190|35|532|561"  # +AppleTV+, Aha, LionsgatePlay
+    LANG_CODE = {"Hindi":"hi","Tamil":"ta","Telugu":"te","Malayalam":"ml","Kannada":"kn","English":"en","Korean":"ko"}
 
     films = []      # accumulates TMDB movie dicts
     seen  = set()   # dedup by tmdb id
@@ -2540,12 +2544,18 @@ def get_new_ott_releases():
                 "with_watch_providers": INDIA_PROVIDERS, "language": "en-US",
                 "vote_count.gte": 5, "sort_by": "primary_release_date.desc", "page": 1}
 
-    for lang, label in [("hi|ta|te|ml|kn", "Indian"), ("en", "Hollywood")]:
+    # Indian + Korean lang groups; Hollywood/Korean get a min-rating filter
+    for lang, label, min_votes in [
+        ("hi|ta|te|ml|kn", "Indian",    5),
+        ("en",             "Hollywood", 50),
+        ("ko",             "Korean",    50),
+    ]:
         try:
             r = requests.get(f"{TMDB_BASE_URL}/discover/movie", params={
                 **BASE, "with_release_type": "4|6",
                 "release_date.gte": week_ago, "release_date.lte": today,
                 "with_original_language": lang, "region": "IN",
+                "vote_count.gte": min_votes,
             }, timeout=10)
             r.raise_for_status()
             for m in r.json().get("results", [])[:5]:
@@ -2559,18 +2569,21 @@ def get_new_ott_releases():
 
     # ── Source 3: theatrical-date proxy (fallback if list is thin) ───────────
     if len(films) < 5:
-        indian_gte = (datetime.utcnow() - timedelta(days=56)).strftime("%Y-%m-%d")
-        indian_lte = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%d")
-        hw_gte     = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
-        hw_lte     = (datetime.utcnow() - timedelta(days=45)).strftime("%Y-%m-%d")
-        for lang, label, gte, lte in [
-            ("hi|ta|te|ml|kn", "Indian",    indian_gte, indian_lte),
-            ("en",             "Hollywood", hw_gte,     hw_lte),
+        # tighter windows — only films plausibly hitting OTT *this* week
+        indian_gte = (datetime.utcnow() - timedelta(days=42)).strftime("%Y-%m-%d")
+        indian_lte = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        hw_gte     = (datetime.utcnow() - timedelta(days=75)).strftime("%Y-%m-%d")
+        hw_lte     = (datetime.utcnow() - timedelta(days=42)).strftime("%Y-%m-%d")
+        for lang, label, gte, lte, min_v in [
+            ("hi|ta|te|ml|kn", "Indian",    indian_gte, indian_lte, 5),
+            ("en",             "Hollywood", hw_gte,     hw_lte,    50),
+            ("ko",             "Korean",    hw_gte,     hw_lte,    50),
         ]:
             try:
                 r = requests.get(f"{TMDB_BASE_URL}/discover/movie", params={
                     **BASE, "primary_release_date.gte": gte,
                     "primary_release_date.lte": lte, "with_original_language": lang,
+                    "vote_count.gte": min_v,
                 }, timeout=10)
                 r.raise_for_status()
                 for m in r.json().get("results", [])[:5]:
@@ -2621,14 +2634,16 @@ def render_ott_list_card(films):
     fonts = _load_fonts()
 
     PLATFORM_COLORS = {
-        "Netflix":            (229,  9, 20),
-        "Amazon Prime Video": (  0,168,224),
-        "Disney+ Hotstar":    (108, 63,194),
-        "Zee5":               (230, 65,115),
-        "JioCinema":          (255,103,  0),
-        "SonyLIV":            (  0,120,215),
-        "Apple TV+":          (255,255,255),
-        "Mubi":               (255,103,  0),
+        "Netflix":        (229,  9, 20),
+        "Prime Video":    (  0,168,224),
+        "JioHotstar":     (108, 63,194),
+        "Zee5":           (230, 65,115),
+        "JioCinema":      (255,103,  0),
+        "SonyLIV":        (  0,120,215),
+        "Apple TV+":      (240,240,240),
+        "Aha":            ( 34,197, 94),
+        "Lionsgate Play": (230, 50, 50),
+        "Mubi":           (255,103,  0),
     }
 
     BG        = (28, 30, 42)   # dark navy instead of near-black
@@ -2651,7 +2666,7 @@ def render_ott_list_card(films):
     ORANGE = COLOR_SAFFRON
     draw.rectangle([(0, 0), (CARD_WIDTH, 8)], fill=ORANGE)
 
-    header1 = "NEW ON OTT"
+    header1 = "OTT RELEASES"
     h1_bbox = draw.textbbox((0, 0), header1, font=fonts["title"])
     h1_w = h1_bbox[2] - h1_bbox[0]
     draw.text(((CARD_WIDTH - h1_w) // 2, 40), header1, font=fonts["title"], fill=(245, 245, 250))
@@ -2673,7 +2688,7 @@ def render_ott_list_card(films):
         year    = (film.get("release_date") or "")[:4]
         langs   = {"hi":"Bollywood","ta":"Tamil","te":"Telugu","ml":"Malayalam","kn":"Kannada"}
         lang    = film.get("original_language", "en")
-        lang_label = langs.get(lang, "Hollywood")
+        lang_label = langs.get(lang, "Korean" if lang == "ko" else "Hollywood")
         platforms  = film.get("_platforms", [])
 
         # Row background (alternating)
@@ -2696,7 +2711,7 @@ def render_ott_list_card(films):
         pill_x = CARD_WIDTH - 54
         for plat in reversed(platforms):
             pc = PLATFORM_COLORS.get(plat, (100, 100, 120))
-            short = plat.replace("Amazon Prime Video", "Prime").replace("Disney+ Hotstar", "Hotstar")
+            short = plat.replace("Lionsgate Play", "Lionsgate")
             pb = draw.textbbox((0, 0), short, font=fonts["tiny"])
             pw = pb[2] - pb[0] + 20
             pill_x -= pw
@@ -2726,34 +2741,13 @@ def render_ott_list_card(films):
 
 
 def generate_ott_caption(films):
-    """Use Groq to write a short, punchy caption for the OTT list post."""
-    titles = ", ".join(f.get("title", "") for f in films[:6])
-    if GROQ_API_KEY:
-        try:
-            client = Groq(api_key=GROQ_API_KEY)
-            prompt = f"""You run @cinedrop on Instagram. You're dropping a weekly OTT watchlist.
-Films this week: {titles}
-
-Write a short Instagram caption (50-80 words):
-- Lead with energy — this is the weekend watchlist
-- Reference 1-2 films by name naturally
-- Tell people to save it and tag someone to watch with
-- Mix Hindi/English — sound like you, not a newsletter
-- No hashtags (going in first comment)"""
-            resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                max_tokens=150,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            log_message(f"OTT caption Groq failed: {e}", level="WARNING")
-
-    # Fallback
+    """Caption is just hashtags — clean, discoverable, no filler text."""
     return (
-        "Ye weekend kya dekh rahe ho? 🎬\n\n"
-        "Weekly OTT drop is here — save karo aur decide karo baad mein.\n"
-        "Tag karo kisi ko jiske saath dekhna hai 👇"
+        "#cinedrop #newonott #ottrelease #weekendwatch #ottindia "
+        "#netflixindia #primevideoindia #jiocinemanow #disneyplushotstar "
+        "#sonylivoriginals #zee5 #bollywood #kollywood #tollywood "
+        "#streamingwatch #ottwatch #weekendwatchlist #bingelist "
+        "#koreanmovies #worldcinema #cinephile"
     )
 
 
@@ -2785,17 +2779,11 @@ def main_ott_list():
         caption = generate_ott_caption(films)
 
         title_list = " · ".join(f.get("title", "") for f in films[:6])
-        alt_text = f"New on OTT this week: {title_list} — by @cinedrop"
+        alt_text = f"OTT releases this week: {title_list} — by @cinedrop"
         post_id = publish_to_instagram(public_image_url, caption, alt_text=alt_text)
 
-        # OTT-specific first comment with hashtags
-        ott_tags = (
-            "#cinedrop #newonott #ottrelease #weekendwatch #netflixindia "
-            "#primevideoindia #disneyplushotstar #zee5 #jiocinemaindia "
-            "#bollywood #streamingwatch #ottwatch #weekendwatchlist #bingethis"
-        )
-        ott_comment = f"save this for the weekend 🔖 drop a 🎬 for the one you're watching\n\n{ott_tags}"
-        post_first_comment(post_id, ott_comment)
+        # Short engagement hook as first comment (no hashtag repeat)
+        post_first_comment(post_id, "save this 🔖 tag someone who needs a watch plan this weekend 🎬")
 
         log_message("=" * 80)
         log_message(f"OTT LIST POST SUCCESS — {len(films)} films | Post ID: {post_id}")
