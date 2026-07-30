@@ -746,6 +746,25 @@ def get_movie():
                 except Exception as e:
                     log_message(f"  {era_label.capitalize()} {cinema_type}: {str(e)}", level="WARNING")
 
+        # Add India daily trending movies to boost relevance
+        try:
+            trend_url = f"{TMDB_BASE_URL}/trending/movie/day"
+            trend_resp = requests.get(
+                trend_url,
+                params={"api_key": TMDB_API_KEY, "region": "IN"},
+                timeout=10,
+            )
+            if trend_resp.status_code == 200:
+                trending_movies = trend_resp.json().get("results", [])[:12]
+                for m in trending_movies:
+                    lang = m.get("original_language", "en")
+                    m["_era"] = "recent"
+                    m["_cinema_type"] = "Indian" if lang in ["hi","ta","te","ml","kn"] else "Hollywood"
+                all_movies.extend(trending_movies)
+                log_message(f"  India trending: added {len(trending_movies)} movies to pool")
+        except Exception as e:
+            log_message(f"India trending fetch failed: {e}", level="WARNING")
+
         # Deduplicate by movie ID
         seen_ids = set()
         unique_movies = []
@@ -766,12 +785,19 @@ def get_movie():
         # Shuffle for variety
         random.shuffle(unique_movies)
 
-        # Filter out posted movies
-        movie = None
-        for m in unique_movies:
-            if m["id"] not in posted_ids:
-                movie = m
-                break
+        # Split into unposted pools — prefer Indian content (target audience is India)
+        unposted_indian = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Indian"]
+        unposted_hollywood = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Hollywood"]
+
+        log_message(f"Unposted pool: {len(unposted_indian)} Indian, {len(unposted_hollywood)} Hollywood")
+
+        # 65% chance of Indian content; fall back to whatever is available
+        if unposted_indian and (not unposted_hollywood or random.random() < 0.65):
+            movie = unposted_indian[0]
+        elif unposted_hollywood:
+            movie = unposted_hollywood[0]
+        else:
+            movie = None
 
         if not movie:
             log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
@@ -916,16 +942,13 @@ One question at the end to start a fight in the comments.
 Mix Telugu/Hindi/English randomly — whatever feels right for this film.
 No hashtags. No emojis overload.
 
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+CAPTION FORMAT — aim for 100-200 words:
+- Hook: 5-8 words that stop the scroll (no period, just a line break)
+- Body: 3-5 punchy sentences. Real talk. No fluff. No explaining.
+- Streaming: mention where to watch in India naturally in the body
+- Close: ONE specific question that starts a fight or hits deep
 """
-            max_tokens = 400
+            max_tokens = 600
 
         elif post_type == "hot_take":
             prompt = f"""
@@ -941,16 +964,12 @@ Be aggressive. Be funny. Pick a side hard.
 Mix Telugu/Hindi/English. Sound like you're arguing with someone right now.
 End with something that will make people reply angrily or excitedly.
 
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+CAPTION FORMAT — aim for 100-200 words:
+- Hook: 5-8 words that stop the scroll (no period, just a line break)
+- Body: 3-5 punchy sentences. Aggressive. Pick a hard side.
+- Close: ONE line that will trigger replies — either agreement or anger
 """
-            max_tokens = 400
+            max_tokens = 600
 
         elif post_type == "dialogue":
             prompt = f"""
@@ -964,16 +983,12 @@ If English give in English.
 Then one line — just one — saying why that line hits.
 Sound like you're sending this to a friend at 1am.
 
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+CAPTION FORMAT — aim for 80-150 words:
+- Lead with the quote (in original language/script)
+- 2-3 sentences reacting to it like a human, not a critic
+- Close: ONE question like "who else remembers this scene?"
 """
-            max_tokens = 400
+            max_tokens = 600
 
         elif post_type == "mood_pick":
             prompt = f"""
@@ -989,39 +1004,32 @@ or "Sunday morning chai before everyone wakes up"
 or "when you need to cry but don't know why"
 or "boys trip, after dinner, non negotiable"
 
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+CAPTION FORMAT — aim for 100-200 words:
+- Hook: the specific mood/moment this film is for (5-8 words)
+- Body: 3-5 sentences — describe the exact vibe and who needs it
+- Streaming: mention where to find it in India
+- Close: ONE question — "what mood are you in right now?"
 """
-            max_tokens = 400
+            max_tokens = 600
 
         elif post_type == "trivia":
             prompt = f"""
 {title} ({year}) · {language_label} · {rating}/10
 Story: {overview}
 
-Give me one wild fact about this film.
+Give me one genuine, verifiable fact about this film.
 Something that makes people go "wait what".
 Include a number — days, crores, years, something concrete.
-If you don't know a real fact make it feel real and specific.
-One sentence follow up reacting to the fact like a human would.
+Only share facts you are confident are real. If unsure, share a genuine insight about its cultural impact, production story, or box office instead — no fabrication.
+One sentence follow up reacting to it like a human would.
 Sound like you just found this out and had to tell someone.
 
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+CAPTION FORMAT — aim for 80-150 words:
+- Hook: the wild fact itself as the first line
+- Body: 2-3 sentences reacting to it, adding context
+- Close: ONE question like "did you know this?" or "what other facts am I missing?"
 """
-            max_tokens = 400
+            max_tokens = 600
 
         elif post_type == "list":
             prompt = f"""
@@ -1030,28 +1038,18 @@ Genre: {genre_name}
 
 Give me 5 films to watch if someone loved this one.
 Mix Indian and Hollywood. Mix languages. Real films only.
-For each film: title, year, one word why.
-Then one aggressive line at the top introducing the list.
-Sound like you made this list at 2am because someone asked you.
-
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+For each film: title, year, and a 2-3 word reason that actually means something.
+Then one punchy line at the top introducing the list — sound like you made this at 2am because someone asked.
 
 Return as JSON only:
 {{
-  "intro": "one aggressive intro line",
+  "intro": "one punchy intro line",
   "films": [
-    {{"title": "...", "year": 0000, "reason": "one word"}},
-    {{"title": "...", "year": 0000, "reason": "one word"}},
-    {{"title": "...", "year": 0000, "reason": "one word"}},
-    {{"title": "...", "year": 0000, "reason": "one word"}},
-    {{"title": "...", "year": 0000, "reason": "one word"}}
+    {{"title": "...", "year": 0000, "reason": "2-3 words"}},
+    {{"title": "...", "year": 0000, "reason": "2-3 words"}},
+    {{"title": "...", "year": 0000, "reason": "2-3 words"}},
+    {{"title": "...", "year": 0000, "reason": "2-3 words"}},
+    {{"title": "...", "year": 0000, "reason": "2-3 words"}}
   ]
 }}
 JSON only. No markdown. No explanation.
@@ -1066,17 +1064,8 @@ Story: {overview}
 
 Rate this film honestly on these 4 things — score out of 10:
 Story, Performances, Rewatch value, Emotional hit
-Give a one word verdict: MASTERPIECE / SOLID / DECENT / SKIP
-Then one line verdict in Hinglish or Telugu — aggressive and honest.
-
-CAPTION LENGTH HARD LIMIT:
-- Maximum 150 characters total for the caption text (excluding hashtags)
-- If you write more than 150 characters you have failed
-- Count every character including spaces and emojis
-- No long sentences. No explanations. No descriptions.
-- Hook: max 8 words
-- Body: ONE sentence only. Not two. One.
-- That's it. Hook + one sentence + streaming + question. Done.
+Verdict must be exactly one of: MUST WATCH / SOLID PICK / DECENT / SKIP
+Then 1-2 sentences in Hinglish or Telugu — aggressive and honest. Make it sting.
 
 Return as JSON only:
 {{
@@ -1084,8 +1073,8 @@ Return as JSON only:
   "performances": 0.0,
   "rewatch": 0.0,
   "emotional_hit": 0.0,
-  "verdict": "WORD",
-  "verdict_line": "one aggressive honest line"
+  "verdict": "MUST WATCH or SOLID PICK or DECENT or SKIP",
+  "verdict_line": "1-2 aggressive honest sentences"
 }}
 JSON only. No markdown. No explanation.
 """
@@ -1544,205 +1533,162 @@ def render_b3(movie, streaming_platforms):
     return _save_card(card, movie["id"])
 
 def render_d1(movie, streaming_platforms):
-    """Minimal mood line — small poster centered top. Badges. Title. Big rating. One mood line."""
+    """Minimal mood line — full poster background, centered title, big rating, mood line."""
     fonts = _load_fonts()
-    # Thumbnail always uses the real poster
-    thumb_img = _download_poster(movie.get("poster_path")) if movie.get("poster_path") else Image.new("RGB", (320, 460), (30,30,40))
+    poster_img = _get_card_background(movie)
     cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
     era_text, era_color, year = _get_era(movie)
     rating = round(movie.get("vote_average", 0), 1)
     title  = movie.get("title", "Unknown")
     mood   = movie.get("_mood", "watch alone, lights off")
 
-    card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (8,8,8))
-    draw = ImageDraw.Draw(card)
+    # Full poster background — scaled to fill, darkened (same pipeline as b2/b3)
+    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
+    card = Image.blend(bg, dark, alpha=0.40)
 
-    # Top accent line
-    draw.rectangle([(0,0),(CARD_WIDTH,6)], fill=cinema_color)
+    if movie.get("_bg_source") == "mood_color":
+        try:
+            emoji_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 380) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
+            card_temp = card.convert("RGBA")
+            draw_temp = ImageDraw.Draw(card_temp)
+            draw_temp.text((CARD_WIDTH//2 - 200, CARD_HEIGHT//2 - 250), "🎬", font=emoji_font, fill=(20,20,30,150))
+            card = card_temp.convert("RGB")
+        except:
+            pass
 
-    # Dark top panel
-    draw.rectangle([(0,6),(CARD_WIDTH,520)], fill=(12,12,18))
-
-    # Poster thumbnail centered in top panel
-    THUMB_W, THUMB_H = 320, 460
-    thumb = thumb_img.copy().resize((THUMB_W, THUMB_H), Image.Resampling.LANCZOS)
-    mask = Image.new("L", (THUMB_W, THUMB_H), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([(0,0),(THUMB_W,THUMB_H)], radius=16, fill=255)
-    thumb_rgba = thumb.convert("RGBA")
-    thumb_rgba.putalpha(mask)
+    # Strong bottom gradient (600px) for text readability
+    grad = Image.new("RGBA", (CARD_WIDTH, 600), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(grad)
+    for i in range(600):
+        alpha = int((i / 600) * 250)
+        gd.rectangle([(0, i), (CARD_WIDTH, i+1)], fill=(0, 0, 0, alpha))
     card_rgba = card.convert("RGBA")
-    px = (CARD_WIDTH - THUMB_W)//2
-    card_rgba.paste(thumb_rgba, (px, 30), thumb_rgba)
+    card_rgba.paste(grad, (0, CARD_HEIGHT - 600), grad)
     card = card_rgba.convert("RGB")
-    draw = ImageDraw.Draw(card)
 
-    # Log background source (d1 always uses poster for thumbnail, but log it)
-    log_message(f"Background used in render_d1: poster (thumbnail only)")
-    
-    # Badges over thumbnail
-    bw, _ = _draw_pill(draw, 40, 20, cinema_label, fonts["small"], cinema_color)
-    _draw_pill(draw, 40+bw+12, 20, era_text, fonts["tiny"],
+    draw = ImageDraw.Draw(card)
+    log_message(f"Background used in render_d1: {movie.get('_bg_source', 'poster')}")
+
+    # Top badges
+    bw, _ = _draw_pill(draw, 40, 50, cinema_label, fonts["small"], cinema_color)
+    _draw_pill(draw, 40 + bw + 12, 50, era_text, fonts["tiny"],
                era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
 
-    # Divider
-    draw.rectangle([(0,520),(CARD_WIDTH,522)], fill=(20,20,20))
-
-    # Body section — massive centered title
-    body_y = 548
+    # Bottom zone — massive centered title
     title_upper = title.upper()
     title_lines = _wrap_text(draw, title_upper, fonts["title"], CARD_WIDTH - 80)
-    title_start_y = body_y + 40
-    
+    title_start_y = CARD_HEIGHT - 520
+
     for i, line in enumerate(title_lines[:2]):
         t_bbox = draw.textbbox((0, 0), line, font=fonts["title"])
         t_w = t_bbox[2] - t_bbox[0]
-        t_x = (CARD_WIDTH - t_w) // 2  # centered
-        # Shadow for readability
-        draw.text((t_x + 3, title_start_y + i*90 + 3), line,
-                  font=fonts["title"], fill=(0, 0, 0))
-        # Main text
-        draw.text((t_x, title_start_y + i*90), line,
-                  font=fonts["title"], fill=(255, 255, 255))
+        t_x = (CARD_WIDTH - t_w) // 2
+        draw.text((t_x + 3, title_start_y + i*90 + 3), line, font=fonts["title"], fill=(0, 0, 0))
+        draw.text((t_x, title_start_y + i*90), line, font=fonts["title"], fill=(255, 255, 255))
 
-    # Giant standalone rating — takes up its own visual zone
+    # Rating — large, centered, gold
+    rating_str = f"\u2b50 {rating} / 10"
     rating_y = title_start_y + len(title_lines[:2]) * 90 + 40
-    rating_solo = str(rating)
-    rs_bbox = draw.textbbox((0, 0), rating_solo, font=fonts["title"])
-    rs_w = rs_bbox[2] - rs_bbox[0]
-    rs_x = (CARD_WIDTH - rs_w) // 2
-    draw.text((rs_x + 3, rating_y + 3), rating_solo,
-              font=fonts["title"], fill=(0, 0, 0))
-    draw.text((rs_x, rating_y), rating_solo,
-              font=fonts["title"], fill=(255, 215, 0))
+    r_bbox = draw.textbbox((0, 0), rating_str, font=fonts["large"])
+    r_w = r_bbox[2] - r_bbox[0]
+    r_x = (CARD_WIDTH - r_w) // 2
+    draw.text((r_x + 2, rating_y + 2), rating_str, font=fonts["large"], fill=(0, 0, 0))
+    draw.text((r_x, rating_y), rating_str, font=fonts["large"], fill=(255, 215, 0))
 
-    # "/10" smaller, right-aligned next to rating
-    sub_text = "/10"
-    sub_bbox = draw.textbbox((0, 0), sub_text, font=fonts["medium"])
-    draw.text((rs_x + rs_w + 10, rating_y + 48), sub_text,
-              font=fonts["medium"], fill=(80, 80, 80))
-
-    # Mood line — italic feel, orange color
-    mood_y = rating_y + 100
+    # Mood line
+    mood_y = rating_y + 90
     draw.text((54, mood_y), f"\u2022 {mood}", font=fonts["body"], fill=cinema_color)
-
-    # Thin divider
-    div_y = mood_y + 52
-    draw.rectangle([(54, div_y),(CARD_WIDTH-54, div_y+1)], fill=(22,22,22))
 
     # Streaming
     india_p = streaming_platforms.get("IN", [])[:2]
     stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
-    stream_y = div_y + 20
-    draw.text((54, stream_y), stream_text, font=fonts["small"], fill=(80,80,80))
+    draw.text((54, mood_y + 50), stream_text, font=fonts["small"], fill=(160, 160, 160))
 
     # Bottom bar
-    bar_y = CARD_HEIGHT - 80
-    draw.rectangle([(0,bar_y),(CARD_WIDTH,CARD_HEIGHT)], fill=(5,5,5))
-    draw.rectangle([(0,bar_y),(CARD_WIDTH,bar_y+1)], fill=(18,18,18))
-    draw.text((54, bar_y+22), "@cinedrop", font=fonts["body"], fill=(40,40,40))
+    bar_y = CARD_HEIGHT - 70
+    draw.rectangle([(0, bar_y), (CARD_WIDTH, CARD_HEIGHT)], fill=cinema_color)
+    draw.text((40, bar_y + 18), "@cinedrop", font=fonts["small"], fill=(255, 255, 255, 140))
     save_text = "save this"
-    s_w = draw.textbbox((0,0), save_text, font=fonts["body"])[2]
-    draw.text((CARD_WIDTH-s_w-54, bar_y+22), save_text, font=fonts["body"], fill=(80,80,80))
+    s_w = draw.textbbox((0, 0), save_text, font=fonts["small"])[2]
+    draw.text((CARD_WIDTH - s_w - 40, bar_y + 18), save_text, font=fonts["small"], fill=(255, 255, 255))
 
     return _save_card(card, movie["id"])
 
 def render_d2(movie, streaming_platforms):
-    """Quote + colored bar — small poster top left. Badges. Quote mid-card. Title + meta below. Bold colored bottom bar."""
+    """Quote card — blurred full poster background, featured dialogue quote."""
     fonts = _load_fonts()
-    # Thumbnail always uses the real poster
-    thumb_img = _download_poster(movie.get("poster_path")) if movie.get("poster_path") else Image.new("RGB", (260, 380), (30,30,40))
+    poster_img = _get_card_background(movie)
     cinema_label, cinema_color, is_indian = _get_cinema_info(movie)
     era_text, era_color, year = _get_era(movie)
     rating   = round(movie.get("vote_average", 0), 1)
     title    = movie.get("title", "Unknown")
     dialogue = movie.get("_dialogue", "Some stories stay with you forever.")
 
-    card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (6,6,6))
+    # Blurred poster background gives editorial / depth-of-field feel
+    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=12))
+    dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
+    card = Image.blend(bg, dark, alpha=0.62)
+
+    if movie.get("_bg_source") == "mood_color":
+        try:
+            emoji_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 300) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
+            card_temp = card.convert("RGBA")
+            draw_temp = ImageDraw.Draw(card_temp)
+            draw_temp.text((CARD_WIDTH//2 - 160, CARD_HEIGHT//2 - 200), "\U0001f4ac", font=emoji_font, fill=(25,25,35,120))
+            card = card_temp.convert("RGB")
+        except:
+            pass
+
+    log_message(f"Background used in render_d2: {movie.get('_bg_source', 'poster')} (blurred)")
     draw = ImageDraw.Draw(card)
 
-    # Top section — dark panel
-    draw.rectangle([(0,0),(CARD_WIDTH,440)], fill=(10,10,14))
-
-    # Poster thumbnail top left
-    THUMB_W, THUMB_H = 260, 380
-    thumb = thumb_img.copy().resize((THUMB_W, THUMB_H), Image.Resampling.LANCZOS)
-    mask  = Image.new("L", (THUMB_W, THUMB_H), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([(0,0),(THUMB_W,THUMB_H)], radius=14, fill=255)
-    thumb_rgba = thumb.convert("RGBA")
-    thumb_rgba.putalpha(mask)
-    card_rgba = card.convert("RGBA")
-    card_rgba.paste(thumb_rgba, (54, 30), thumb_rgba)
-    card = card_rgba.convert("RGB")
-    draw = ImageDraw.Draw(card)
-
-    # Log background source (d2 always uses poster for thumbnail, but log it)
-    log_message(f"Background used in render_d2: poster (thumbnail only)")
-    
-    # Right of poster — movie info
-    info_x = 54 + THUMB_W + 36
-    _draw_pill(draw, info_x, 40, cinema_label, fonts["small"], cinema_color)
-    _draw_pill(draw, info_x, 96, era_text, fonts["tiny"],
+    # Top: cinema badge, era badge
+    _draw_pill(draw, 54, 54, cinema_label, fonts["small"], cinema_color)
+    cinema_pill_w = draw.textbbox((0, 0), cinema_label, font=fonts["small"])[2] + 36 + 54
+    _draw_pill(draw, cinema_pill_w, 54, era_text, fonts["tiny"],
                era_color, (0,0,0) if era_color==(212,175,55) else (255,255,255))
-    title_lines = _wrap_text(draw, title, fonts["medium"], 580-info_x)
-    ty = 148
-    for i, line in enumerate(title_lines[:3]):
-        draw.text((info_x, ty+i*50), line, font=fonts["medium"], fill=(255,255,255))
-    draw.text((info_x, ty+len(title_lines[:3])*50+8),
-              str(year), font=fonts["body"], fill=(70,70,70))
 
-    # Divider
-    draw.rectangle([(0,440),(CARD_WIDTH,442)], fill=(16,16,16))
+    # Title and year below badges
+    title_lines = _wrap_text(draw, title, fonts["large"], CARD_WIDTH - 108)
+    for i, line in enumerate(title_lines[:2]):
+        draw.text((54, 120 + i * 80), line, font=fonts["large"], fill=(240, 240, 240))
+    year_y = 120 + min(len(title_lines[:2]), 2) * 80 + 10
+    draw.text((54, year_y), str(year), font=fonts["body"], fill=(80, 80, 80))
 
-    # Quote section
-    quote_y = 470
-    # Accent vertical bar
-    draw.rectangle([(54, quote_y),(62, quote_y+300)], fill=cinema_color)
-    # Open quote mark
-    draw.text((76, quote_y-30), "\u201c", font=fonts["title"],
-              fill=(*cinema_color[:3],))
-    # Dialogue text wrapped
-    q_lines = _wrap_text(draw, dialogue, fonts["body"], 900)
+    # Thin divider
+    div1_y = year_y + 50
+    draw.rectangle([(54, div1_y), (CARD_WIDTH - 54, div1_y + 1)], fill=(30, 30, 30))
+
+    # Quote hero section — centered in the remaining space
+    quote_y = div1_y + 120
+    draw.rectangle([(54, quote_y), (62, quote_y + 330)], fill=cinema_color)
+    draw.text((76, quote_y - 30), "\u201c", font=fonts["title"], fill=cinema_color)
+    q_lines = _wrap_text(draw, dialogue, fonts["medium"], CARD_WIDTH - 130)
     for i, line in enumerate(q_lines[:5]):
-        draw.text((76, quote_y+50+i*48), line, font=fonts["body"],
-                  fill=(190,190,190))
+        draw.text((80, quote_y + 50 + i * 62), line, font=fonts["medium"], fill=(200, 200, 200))
 
-    # Thin divider before bottom bar
-    draw.rectangle([(0, CARD_HEIGHT-170),(CARD_WIDTH, CARD_HEIGHT-168)], fill=(16,16,16))
-
-    # Streaming line
+    # Streaming
     india_p = streaming_platforms.get("IN", [])[:2]
     stream_text = "  \u00b7  ".join(india_p) if india_p else "Rental only"
-    draw.text((54, CARD_HEIGHT-155), stream_text, font=fonts["small"], fill=(70,70,70))
+    draw.text((54, CARD_HEIGHT - 155), stream_text, font=fonts["small"], fill=(100, 100, 100))
 
-    # Bold colored bottom bar with giant centered rating and handle
-    draw.rectangle([(0,CARD_HEIGHT-100),(CARD_WIDTH,CARD_HEIGHT)], fill=cinema_color)
-    
-    # Giant standalone rating — left side
-    rating_solo = str(rating)
-    rs_bbox = draw.textbbox((0, 0), rating_solo, font=fonts["title"])
-    rs_w = rs_bbox[2] - rs_bbox[0]
-    rs_x = 54
-    draw.text((rs_x + 3, CARD_HEIGHT - 75 + 3), rating_solo,
-              font=fonts["title"], fill=(0, 0, 0))
-    draw.text((rs_x, CARD_HEIGHT - 75), rating_solo,
-              font=fonts["title"], fill=(255, 255, 255))
-    
-    # "/10" smaller, right next to rating
-    sub_text = "/10"
-    sub_bbox = draw.textbbox((0, 0), sub_text, font=fonts["medium"])
-    draw.text((rs_x + rs_w + 10, CARD_HEIGHT - 52), sub_text,
-              font=fonts["medium"], fill=(220, 220, 220))
-    
-    # Handle right
+    # Colored bottom bar with centered rating
+    draw.rectangle([(0, CARD_HEIGHT - 100), (CARD_WIDTH, CARD_HEIGHT)], fill=cinema_color)
+    rating_str = f"\u2b50 {rating} / 10"
+    r_bbox = draw.textbbox((0, 0), rating_str, font=fonts["large"])
+    r_w = r_bbox[2] - r_bbox[0]
+    r_x = (CARD_WIDTH - r_w) // 2
+    draw.text((r_x, CARD_HEIGHT - 80), rating_str, font=fonts["large"], fill=(255, 255, 255))
     handle = "@cinedrop"
-    h_w = draw.textbbox((0,0), handle, font=fonts["body"])[2]
-    draw.text((CARD_WIDTH-h_w-54, CARD_HEIGHT-68),
-              handle, font=fonts["body"], fill=(255,255,255,150))
+    h_w = draw.textbbox((0, 0), handle, font=fonts["small"])[2]
+    draw.text((CARD_WIDTH - h_w - 54, CARD_HEIGHT - 38), handle, font=fonts["small"], fill=(255, 255, 255, 160))
 
     return _save_card(card, movie["id"])
 
 
-def create_story_card(feed_card_path, movie, post_type):
+def create_story_card(feed_card_path, movie, post_type, post_permalink=None):
     """
     Create a Story-optimized version of the feed card.
     Stories are 1080x1920px (9:16).
@@ -1822,10 +1768,10 @@ def create_story_card(feed_card_path, movie, post_type):
             fill=COLOR_SAFFRON
         )
 
-        # CTA lines — tell people where to go
+        # CTA lines — guide viewers to the actual feed post
         cta_lines = [
-            "full post on our page",
-            "@cinedrop.01 👆"
+            "full post in our feed 👆",
+            "@cinedrop.01"
         ]
 
         cta_y = STORY_HEIGHT - 220
@@ -1969,42 +1915,88 @@ HARD LIMIT: 3 words maximum. Not 4. Not a sentence. 3 words."""
         return caption
 
 def build_caption(content, movie, post_type):
-    """Build Instagram caption from content and post type, with spice."""
-    caption = content.get("caption", "")
-    hashtags = content.get("hashtags", "")
-    caption = f"{caption}\n\n{hashtags}"
-    caption = add_caption_spice(caption, movie, post_type)
-    
-    # Hard enforce caption length — strip everything past 150 chars before hashtags
-    lines = caption.split("\n")
-    caption_lines = []
-    hashtag_lines = []
-    in_hashtags = False
-
-    for line in lines:
-        if line.strip().startswith("#"):
-            in_hashtags = True
-        if in_hashtags:
-            hashtag_lines.append(line)
-        else:
-            caption_lines.append(line)
-
-    # Join caption body and enforce 150 char limit
-    caption_body = "\n".join(caption_lines).strip()
-    if len(caption_body) > 300:
-        # Keep only up to the 3rd newline — hook + one line + streaming
-        short_lines = [l for l in caption_lines if l.strip()][:4]
-        caption_body = "\n".join(short_lines)
-
-    hashtag_body = "\n".join(hashtag_lines).strip()
-
-    if hashtag_body:
-        caption = f"{caption_body}\n\n{hashtag_body}"
+    """Returns (caption_body, hashtag_block) — hashtags posted separately as first comment."""
+    # Build caption body depending on post type
+    if post_type == "list" and "films" in content:
+        intro = content.get("intro", "films to watch next")
+        films = content.get("films", [])
+        lines = [intro, ""]
+        for idx, film in enumerate(films, 1):
+            lines.append(f"{idx}. {film.get('title', '?')} ({film.get('year', '')}) \u2014 {film.get('reason', '')}")
+        caption_text = "\n".join(lines)
+    elif post_type == "rating" and "verdict" in content:
+        caption_text = (
+            f"{content.get('verdict_line', 'worth a watch')}\n\n"
+            f"Story: {content.get('story', 7.0)}/10\n"
+            f"Performances: {content.get('performances', 7.0)}/10\n"
+            f"Rewatch: {content.get('rewatch', 6.5)}/10\n"
+            f"Emotional Hit: {content.get('emotional_hit', 7.0)}/10\n\n"
+            f"VERDICT: {content.get('verdict', 'SOLID')}"
+        )
     else:
-        caption = caption_body
+        caption_text = content.get("caption", "")
 
-    log_message(f"Final caption length: {len(caption_body)} chars")
-    return caption
+    hashtag_block = content.get("hashtags", "")
+    caption_body = add_caption_spice(caption_text, movie, post_type)
+
+    # Respect Instagram's 2200 char limit without aggressive truncation
+    if len(caption_body) > 2000:
+        caption_body = caption_body[:2000].rsplit("\n", 1)[0].strip()
+
+    log_message(f"Caption: {len(caption_body)} chars | Hashtags: {len(hashtag_block.split())} tags")
+    return caption_body, hashtag_block
+
+
+def build_first_comment(movie, post_type, hashtag_block):
+    """Movie-specific line from Groq + curated hashtags. Hinglish fallback if Groq fails."""
+    title = movie.get("title", "")
+    year  = int(movie.get("release_date", "2000")[:4] or 2000)
+    lang  = movie.get("original_language", "en")
+
+    hook = ""
+    if GROQ_API_KEY:
+        try:
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = f"""You run @cinedrop on Instagram. You just posted about {title} ({year}).
+Write ONE punchy line to drop as a comment on your own post.
+Rules:
+- Don't start with "this film", "this movie", or "watch"
+- Reference something specific about {title} — a feeling it gives, type of scene, culture, a character vibe
+- Sound like a 24-year-old Indian film obsessive — real, not polished
+- End with a question OR an action trigger (tag someone, drop an emoji, save this)
+- Mix Hindi/Telugu/English if it hits harder for this particular film
+- Max 15 words. Just the line. No hashtags."""
+            resp = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                max_tokens=50,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw = resp.choices[0].message.content.strip().split("\n")[0].strip()
+            if raw and len(raw) <= 120:
+                hook = raw
+        except Exception as e:
+            log_message(f"First comment Groq call failed: {e}", level="WARNING")
+
+    if not hook:
+        fallbacks = {
+            "recommendation": "agar ye miss kiya toh seriously kya dekha hai \ud83e\udd26",
+            "hot_take":       "ek baar dekho phir bolna \u2014 aaj bhi stand by my take",
+            "dialogue":       "kuch lines hoti hain jo literally aapke saath rehti hain",
+            "mood_pick":      "sahi mood mein dekho ye \u2014 trust me on this",
+            "trivia":         "ye fact mujhe bhi recently pata chala aur main shocked tha",
+            "list":           "ye list maine 2 baje banaya tha \u2014 ab aapke kaam aayega",
+            "rating":         "honest review mein darrta nahi \u2014 agree karo ya na karo",
+        }
+        hook = fallbacks.get(post_type, "tag karo kisi ko jo ye nahi dekha \ud83d\udc47")
+
+    # Brand tag first, then 7 most relevant — no 28-tag wall
+    all_tags  = hashtag_block.split() if hashtag_block else []
+    brand     = [t for t in all_tags if "cinedrop" in t.lower()]
+    rest      = [t for t in all_tags if "cinedrop" not in t.lower()][:7]
+    core_tags = " ".join(brand[:1] + rest)
+
+    return f"{hook}\n\n{core_tags}".strip()
+
 
 def upload_card_for_instagram(card_path):
     """
@@ -2013,9 +2005,9 @@ def upload_card_for_instagram(card_path):
     Returns a raw.githubusercontent.com URL that Instagram accepts.
     """
     try:
-        repo   = os.getenv("GITHUB_REPOSITORY", "ravibandoju/cinedrop-bot")
-        branch = os.getenv("GITHUB_REF_NAME", "main")
-        token  = os.getenv("GH_TOKEN") or os.getenv("HISTORY_REPO_TOKEN")
+        repo   = HISTORY_REPO   # state repo keeps card files off the bot repo
+        branch = "main"
+        token  = os.getenv("HISTORY_REPO_TOKEN") or os.getenv("GH_TOKEN")
 
         if not token:
             log_message("GH_TOKEN not set — cannot upload card", level="ERROR")
@@ -2061,7 +2053,7 @@ def upload_card_for_instagram(card_path):
         return None
 
 
-def publish_to_instagram(image_url, caption):
+def publish_to_instagram(image_url, caption, alt_text=""):
     """Publish image and caption to Instagram using the Instagram Graph API."""
     if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_ACCOUNT_ID:
         raise ValueError("INSTAGRAM_ACCESS_TOKEN or INSTAGRAM_ACCOUNT_ID not found in environment variables")
@@ -2074,6 +2066,7 @@ def publish_to_instagram(image_url, caption):
         container_payload = {
             "image_url": image_url,
             "caption": caption,
+            "alt_text": alt_text or "",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
         }
 
@@ -2115,7 +2108,46 @@ def publish_to_instagram(image_url, caption):
         raise
 
 
-def publish_to_story(image_url):
+def post_first_comment(post_id, comment_text):
+    """Post hashtags as the first comment to keep the caption clean."""
+    if not INSTAGRAM_ACCESS_TOKEN or not post_id or not comment_text.strip():
+        return None
+    try:
+        url = f"{INSTAGRAM_GRAPH_BASE_URL}/{post_id}/comments"
+        resp = requests.post(
+            url,
+            data={"message": comment_text, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        comment_id = resp.json().get("id")
+        if comment_id:
+            log_message(f"Hashtag comment posted: {comment_id}")
+        return comment_id
+    except Exception as e:
+        log_message(f"First comment failed (non-critical): {e}", level="WARNING")
+        return None
+
+
+def get_post_permalink(post_id):
+    """Fetch the permanent URL of a published Instagram post."""
+    try:
+        url = f"{INSTAGRAM_GRAPH_BASE_URL}/{post_id}"
+        resp = requests.get(
+            url,
+            params={"fields": "permalink", "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=10
+        )
+        permalink = resp.json().get("permalink")
+        if permalink:
+            log_message(f"Post permalink: {permalink}")
+        return permalink
+    except Exception as e:
+        log_message(f"Could not fetch post permalink: {e}", level="WARNING")
+        return None
+
+
+def publish_to_story(image_url, post_permalink=None):
     """
     Publish the same card image as an Instagram Story immediately after the feed post.
     Instagram Stories use a separate media container flow with media_type=STORIES.
@@ -2134,7 +2166,7 @@ def publish_to_story(image_url):
             "image_url": image_url,
             "media_type": "STORIES",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
-            "link": "https://www.instagram.com/cinedrop.01/",
+            "link": post_permalink or "https://www.instagram.com/cinedrop.01/",
         }
 
         container_resp = requests.post(
@@ -2306,8 +2338,19 @@ def main():
         time.sleep(20)
         log_message("Image ready for Instagram publishing")
 
-        caption = build_caption(content, movie, post_type)
-        post_id = publish_to_instagram(public_image_url, caption)
+        caption_body, hashtag_block = build_caption(content, movie, post_type)
+        alt_text = (
+            f"{movie_title} ({movie.get('release_date', '')[:4]}) "
+            f"{movie.get('_genre_name', '')} — film card by @cinedrop"
+        ).strip()
+        post_id = publish_to_instagram(public_image_url, caption_body, alt_text=alt_text)
+
+        # Post first comment — engaging hook + curated hashtags (not a raw tag dump)
+        first_comment = build_first_comment(movie, post_type, hashtag_block)
+        post_first_comment(post_id, first_comment)
+
+        # Fetch the post permalink so the story can link directly to it
+        post_permalink = get_post_permalink(post_id)
 
         # Save history immediately after main post succeeds
         save_history(movie, card_path=card_path)
@@ -2326,7 +2369,7 @@ def main():
             log_message("Starting Story flow...")
 
             # Create story-optimized card (1080x1920)
-            story_card_path = create_story_card(card_path, movie, post_type)
+            story_card_path = create_story_card(card_path, movie, post_type, post_permalink=post_permalink)
 
             if story_card_path:
                 # Upload story card to GitHub via Contents API for public hosting
@@ -2334,7 +2377,7 @@ def main():
 
                 if story_public_url:
                     # Publish story immediately after feed post succeeds
-                    story_id = publish_to_story(story_public_url)
+                    story_id = publish_to_story(story_public_url, post_permalink=post_permalink)
 
                     if story_id:
                         log_message(f"Story published: {story_id}")
@@ -2371,4 +2414,401 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--ott-list" in sys.argv:
+        main_ott_list()
+    else:
+        main()
+
+
+# ============================================================================
+# OTT WEEKLY LIST — separate flow, runs every Friday evening
+# ============================================================================
+
+def _search_ott_web() -> list[dict]:
+    """
+    DuckDuckGo news/text search → Groq extraction of this week's Indian OTT film drops.
+    Returns a list of {title, platform, lang} dicts. Empty list on any failure.
+    """
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        log_message("duckduckgo-search not installed; skipping web OTT pass", level="WARNING")
+        return []
+
+    month_year = datetime.utcnow().strftime("%B %Y")
+    queries = [
+        f"new movies Netflix India {month_year}",
+        f"new movies Amazon Prime Video India {month_year}",
+        f"new Bollywood Hindi Tamil Telugu OTT release {month_year}",
+        f"new movies Disney Hotstar JioCinema India {month_year}",
+        f"OTT releases India this week {month_year}",
+    ]
+
+    snippets = []
+    try:
+        with DDGS() as ddgs:
+            for q in queries:
+                for r in ddgs.text(q, max_results=4, timelimit="m"):  # last month
+                    body = (r.get("body") or r.get("snippet") or "")[:400]
+                    if body:
+                        snippets.append(body)
+    except Exception as e:
+        log_message(f"DuckDuckGo search error: {e}", level="WARNING")
+        return []
+
+    if not snippets or not GROQ_API_KEY:
+        return []
+
+    context = "\n---\n".join(snippets[:15])
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            max_tokens=600,
+            messages=[{"role": "user", "content": f"""These are web search snippets about new OTT releases in India this week/month.
+
+{context}
+
+Extract ONLY movies (not TV series/shows) that are confirmed new arrivals on Indian OTT platforms.
+Return ONLY a valid JSON array, nothing else:
+[{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|Hotstar|ZEE5|JioCinema|SonyLIV", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|English"}}]
+
+Rules:
+- Only include films explicitly mentioned in the snippets above
+- Do NOT fabricate or guess titles
+- Omit anything you're not sure is a movie (vs. a series)
+- Max 12 items"""}]
+        )
+        raw = resp.choices[0].message.content.strip()
+        m = re.search(r'\[.*?\]', raw, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group())
+            log_message(f"Web OTT search extracted {len(parsed)} candidates")
+            return parsed if isinstance(parsed, list) else []
+    except Exception as e:
+        log_message(f"Groq OTT extraction failed: {e}", level="WARNING")
+
+    return []
+
+
+def _tmdb_validate_film(title: str) -> dict | None:
+    """Search TMDB by title and return the best match, or None if not found."""
+    try:
+        r = requests.get(f"{TMDB_BASE_URL}/search/movie", params={
+            "api_key": TMDB_API_KEY, "query": title, "language": "en-US", "page": 1,
+        }, timeout=8)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return results[0] if results else None
+    except Exception:
+        return None
+
+
+def get_new_ott_releases():
+    """
+    Fetch movies that hit Indian OTT platforms this week.
+
+    Source priority:
+      1. DuckDuckGo web search + Groq extraction (real-time, finds actual OTT drops)
+      2. TMDB discover with digital release type (release_type=4|6, last 14 days)
+      3. TMDB theatrical-date proxy fallback (smarter per-language windows)
+    Every candidate is validated against TMDB for metadata + provider confirmation.
+    """
+    if not TMDB_API_KEY:
+        raise ValueError("TMDB_API_KEY not set")
+
+    INDIA_PROVIDERS = "8|119|122|237|232|892|190"
+    LANG_CODE = {"Hindi":"hi","Tamil":"ta","Telugu":"te","Malayalam":"ml","Kannada":"kn","English":"en"}
+
+    films = []      # accumulates TMDB movie dicts
+    seen  = set()   # dedup by tmdb id
+
+    # ── Source 1: web search + Groq ──────────────────────────────────────────
+    web_candidates = _search_ott_web()
+    for item in web_candidates:
+        title = item.get("title", "")
+        if not title:
+            continue
+        movie = _tmdb_validate_film(title)
+        if movie and movie["id"] not in seen:
+            seen.add(movie["id"])
+            movie["_cinema_type"]  = "Indian" if movie.get("original_language","en") != "en" else "Hollywood"
+            movie["_date_source"]  = "web"
+            # override language with Groq's extraction if TMDB language looks wrong
+            lang_code = LANG_CODE.get(item.get("lang",""), movie.get("original_language","en"))
+            movie["original_language"] = lang_code
+            films.append(movie)
+    log_message(f"Web source: {len(films)} validated films")
+
+    # ── Source 2: TMDB digital release type (last 14 days) ───────────────────
+    today    = datetime.utcnow().strftime("%Y-%m-%d")
+    week_ago = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%d")
+    BASE     = {"api_key": TMDB_API_KEY, "watch_region": "IN",
+                "with_watch_providers": INDIA_PROVIDERS, "language": "en-US",
+                "vote_count.gte": 5, "sort_by": "primary_release_date.desc", "page": 1}
+
+    for lang, label in [("hi|ta|te|ml|kn", "Indian"), ("en", "Hollywood")]:
+        try:
+            r = requests.get(f"{TMDB_BASE_URL}/discover/movie", params={
+                **BASE, "with_release_type": "4|6",
+                "release_date.gte": week_ago, "release_date.lte": today,
+                "with_original_language": lang, "region": "IN",
+            }, timeout=10)
+            r.raise_for_status()
+            for m in r.json().get("results", [])[:5]:
+                if m["id"] not in seen:
+                    seen.add(m["id"])
+                    m["_cinema_type"] = label
+                    m["_date_source"] = "digital"
+                    films.append(m)
+        except Exception as e:
+            log_message(f"TMDB digital pass failed ({label}): {e}", level="WARNING")
+
+    # ── Source 3: theatrical-date proxy (fallback if list is thin) ───────────
+    if len(films) < 5:
+        indian_gte = (datetime.utcnow() - timedelta(days=56)).strftime("%Y-%m-%d")
+        indian_lte = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%d")
+        hw_gte     = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+        hw_lte     = (datetime.utcnow() - timedelta(days=45)).strftime("%Y-%m-%d")
+        for lang, label, gte, lte in [
+            ("hi|ta|te|ml|kn", "Indian",    indian_gte, indian_lte),
+            ("en",             "Hollywood", hw_gte,     hw_lte),
+        ]:
+            try:
+                r = requests.get(f"{TMDB_BASE_URL}/discover/movie", params={
+                    **BASE, "primary_release_date.gte": gte,
+                    "primary_release_date.lte": lte, "with_original_language": lang,
+                }, timeout=10)
+                r.raise_for_status()
+                for m in r.json().get("results", [])[:5]:
+                    if m["id"] not in seen:
+                        seen.add(m["id"])
+                        m["_cinema_type"] = label
+                        m["_date_source"] = "proxy"
+                        films.append(m)
+            except Exception as e:
+                log_message(f"TMDB proxy pass failed ({label}): {e}", level="WARNING")
+
+    # ── Confirm each film is actually streaming in India right now ────────────
+    # Indian films first, then Hollywood, then verify provider
+    films.sort(key=lambda x: (0 if x.get("_cinema_type") == "Indian" else 1,
+                               0 if x.get("_date_source") == "web" else 1))
+
+    confirmed = []
+    for m in films:
+        if len(confirmed) >= 8:
+            break
+        try:
+            wp = requests.get(
+                f"{TMDB_BASE_URL}/movie/{m['id']}/watch/providers",
+                params={"api_key": TMDB_API_KEY}, timeout=8,
+            ).json().get("results", {}).get("IN", {})
+            providers = [
+                PROVIDER_MAPPING.get(p["provider_id"], p.get("provider_name", ""))
+                for p in wp.get("flatrate", [])
+            ]
+            m["_platforms"] = [p for p in providers if p][:2]
+            if m["_platforms"]:
+                confirmed.append(m)
+        except Exception:
+            pass
+
+    log_message(f"OTT final list: {len(confirmed)} confirmed (sources: "
+                f"web={sum(1 for m in confirmed if m.get('_date_source')=='web')}, "
+                f"digital={sum(1 for m in confirmed if m.get('_date_source')=='digital')}, "
+                f"proxy={sum(1 for m in confirmed if m.get('_date_source')=='proxy')})")
+    return confirmed
+
+
+def render_ott_list_card(films):
+    """
+    Clean dark editorial card listing 5-8 new OTT releases.
+    No movie posters — pure typography.
+    """
+    fonts = _load_fonts()
+
+    PLATFORM_COLORS = {
+        "Netflix":            (229,  9, 20),
+        "Amazon Prime Video": (  0,168,224),
+        "Disney+ Hotstar":    (108, 63,194),
+        "Zee5":               (230, 65,115),
+        "JioCinema":          (255,103,  0),
+        "SonyLIV":            (  0,120,215),
+        "Apple TV+":          (255,255,255),
+        "Mubi":               (255,103,  0),
+    }
+
+    BG        = (28, 30, 42)   # dark navy instead of near-black
+    ROW_ALT   = (34, 37, 52)   # alternating row — barely lighter
+    DIVIDER   = (52, 55, 75)   # visible but soft
+    IDX_COL   = (90, 95, 125)  # index numbers — readable, not washed-out
+    TITLE_COL = (220, 222, 235)
+    META_COL  = (120, 125, 155)
+
+    card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), BG)
+    draw = ImageDraw.Draw(card)
+
+    # Subtle noise texture
+    for _ in range(400):
+        nx, ny = random.randint(0, CARD_WIDTH), random.randint(0, CARD_HEIGHT)
+        v = random.randint(35, 50)
+        draw.point((nx, ny), fill=(v, v, v + 8))
+
+    # Header
+    ORANGE = COLOR_SAFFRON
+    draw.rectangle([(0, 0), (CARD_WIDTH, 8)], fill=ORANGE)
+
+    header1 = "NEW ON OTT"
+    h1_bbox = draw.textbbox((0, 0), header1, font=fonts["title"])
+    h1_w = h1_bbox[2] - h1_bbox[0]
+    draw.text(((CARD_WIDTH - h1_w) // 2, 40), header1, font=fonts["title"], fill=(245, 245, 250))
+
+    header2 = "THIS WEEK  🇮🇳"
+    h2_bbox = draw.textbbox((0, 0), header2, font=fonts["medium"])
+    h2_w = h2_bbox[2] - h2_bbox[0]
+    draw.text(((CARD_WIDTH - h2_w) // 2, 160), header2, font=fonts["medium"], fill=ORANGE)
+
+    # Divider
+    draw.rectangle([(60, 230), (CARD_WIDTH - 60, 233)], fill=DIVIDER)
+
+    # Film rows
+    row_y = 258
+    ROW_H = 126  # height per film row
+
+    for i, film in enumerate(films[:8]):
+        title   = film.get("title", "Unknown")
+        year    = (film.get("release_date") or "")[:4]
+        langs   = {"hi":"Bollywood","ta":"Tamil","te":"Telugu","ml":"Malayalam","kn":"Kannada"}
+        lang    = film.get("original_language", "en")
+        lang_label = langs.get(lang, "Hollywood")
+        platforms  = film.get("_platforms", [])
+
+        # Row background (alternating)
+        if i % 2 == 0:
+            draw.rectangle([(0, row_y), (CARD_WIDTH, row_y + ROW_H - 2)], fill=ROW_ALT)
+
+        # Index number
+        draw.text((54, row_y + 22), f"{i+1}.", font=fonts["medium"], fill=IDX_COL)
+
+        # Title
+        title_lines = _wrap_text(draw, title.upper(), fonts["medium"], CARD_WIDTH - 200)
+        draw.text((110, row_y + 18), title_lines[0] if title_lines else title.upper(),
+                  font=fonts["medium"], fill=TITLE_COL)
+
+        # Year + language badge on second line
+        badge_y = row_y + 68
+        draw.text((110, badge_y), f"{year}  ·  {lang_label}", font=fonts["small"], fill=META_COL)
+
+        # Platform pills right-aligned
+        pill_x = CARD_WIDTH - 54
+        for plat in reversed(platforms):
+            pc = PLATFORM_COLORS.get(plat, (100, 100, 120))
+            short = plat.replace("Amazon Prime Video", "Prime").replace("Disney+ Hotstar", "Hotstar")
+            pb = draw.textbbox((0, 0), short, font=fonts["tiny"])
+            pw = pb[2] - pb[0] + 20
+            pill_x -= pw
+            draw.rounded_rectangle([(pill_x, row_y + 22), (pill_x + pw, row_y + 54)],
+                                    radius=14, fill=pc)
+            draw.text((pill_x + 10, row_y + 27), short, font=fonts["tiny"],
+                      fill=(255, 255, 255) if plat != "Apple TV+" else (0, 0, 0))
+            pill_x -= 10
+
+        row_y += ROW_H
+        # Row separator
+        draw.rectangle([(54, row_y - 2), (CARD_WIDTH - 54, row_y - 1)], fill=DIVIDER)
+
+    # Bottom bar
+    bar_y = CARD_HEIGHT - 70
+    draw.rectangle([(0, bar_y), (CARD_WIDTH, CARD_HEIGHT)], fill=ORANGE)
+    draw.text((54, bar_y + 20), "@cinedrop", font=fonts["medium"], fill=(255, 255, 255))
+    save_text = "save this 🔖"
+    s_w = draw.textbbox((0, 0), save_text, font=fonts["small"])[2]
+    draw.text((CARD_WIDTH - s_w - 54, bar_y + 26), save_text, font=fonts["small"], fill=(255, 255, 255))
+
+    CARDS_DIR.mkdir(exist_ok=True)
+    path = CARDS_DIR / "ott_weekly_list.jpg"
+    card.convert("RGB").save(str(path), "JPEG", quality=93)
+    log_message(f"OTT list card saved: {path}")
+    return str(path)
+
+
+def generate_ott_caption(films):
+    """Use Groq to write a short, punchy caption for the OTT list post."""
+    titles = ", ".join(f.get("title", "") for f in films[:6])
+    if GROQ_API_KEY:
+        try:
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = f"""You run @cinedrop on Instagram. You're dropping a weekly OTT watchlist.
+Films this week: {titles}
+
+Write a short Instagram caption (50-80 words):
+- Lead with energy — this is the weekend watchlist
+- Reference 1-2 films by name naturally
+- Tell people to save it and tag someone to watch with
+- Mix Hindi/English — sound like you, not a newsletter
+- No hashtags (going in first comment)"""
+            resp = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            log_message(f"OTT caption Groq failed: {e}", level="WARNING")
+
+    # Fallback
+    return (
+        "Ye weekend kya dekh rahe ho? 🎬\n\n"
+        "Weekly OTT drop is here — save karo aur decide karo baad mein.\n"
+        "Tag karo kisi ko jiske saath dekhna hai 👇"
+    )
+
+
+def main_ott_list():
+    """Weekly OTT releases post — runs every Friday evening."""
+    try:
+        log_message("=" * 80)
+        log_message("STARTING WEEKLY OTT LIST POST")
+        log_message("=" * 80)
+        log_ist_time()
+        check_token_age()
+
+        films = get_new_ott_releases()
+        if not films:
+            log_message("No new OTT releases found. Exiting.", level="WARNING")
+            return
+
+        log_message(f"Found {len(films)} new OTT releases for the list")
+
+        card_path = render_ott_list_card(films)
+        public_image_url = upload_card_for_instagram(card_path)
+        if not public_image_url:
+            log_message("Card upload failed. Exiting.", level="ERROR")
+            return
+
+        log_message("Waiting for GitHub CDN...")
+        time.sleep(20)
+
+        caption = generate_ott_caption(films)
+
+        title_list = " · ".join(f.get("title", "") for f in films[:6])
+        alt_text = f"New on OTT this week: {title_list} — by @cinedrop"
+        post_id = publish_to_instagram(public_image_url, caption, alt_text=alt_text)
+
+        # OTT-specific first comment with hashtags
+        ott_tags = (
+            "#cinedrop #newonott #ottrelease #weekendwatch #netflixindia "
+            "#primevideoindia #disneyplushotstar #zee5 #jiocinemaindia "
+            "#bollywood #streamingwatch #ottwatch #weekendwatchlist #bingethis"
+        )
+        ott_comment = f"save this for the weekend 🔖 drop a 🎬 for the one you're watching\n\n{ott_tags}"
+        post_first_comment(post_id, ott_comment)
+
+        log_message("=" * 80)
+        log_message(f"OTT LIST POST SUCCESS — {len(films)} films | Post ID: {post_id}")
+        log_message("=" * 80)
+
+    except Exception as e:
+        log_message(f"OTT list post failed: {str(e)}", level="ERROR")
+        raise
