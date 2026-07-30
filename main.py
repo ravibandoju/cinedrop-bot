@@ -2005,9 +2005,9 @@ def upload_card_for_instagram(card_path):
     Returns a raw.githubusercontent.com URL that Instagram accepts.
     """
     try:
-        repo   = os.getenv("GITHUB_REPOSITORY", "ravibandoju/cinedrop-bot")  # must be public for Instagram
-        branch = os.getenv("GITHUB_REF_NAME", "main")
-        token  = os.getenv("GH_TOKEN") or os.getenv("HISTORY_REPO_TOKEN")
+        repo   = HISTORY_REPO  # public state repo hosts cards so bot repo stays clean
+        branch = "main"
+        token  = os.getenv("HISTORY_REPO_TOKEN") or os.getenv("GH_TOKEN")
 
         if not token:
             log_message("GH_TOKEN not set — cannot upload card", level="ERROR")
