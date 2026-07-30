@@ -706,10 +706,9 @@ def get_movie():
         LANGUAGE_GROUPS = [
             {"langs": "en", "type": "Hollywood"},
             {"langs": "hi", "type": "Bollywood"},
-            {"langs": "ta", "type": "Kollywood"},
             {"langs": "te", "type": "Tollywood"},
+            {"langs": "ta", "type": "Kollywood"},
             {"langs": "ml", "type": "Mollywood"},
-            {"langs": "kn", "type": "Sandalwood"},
         ]
 
         all_movies = []
@@ -753,9 +752,9 @@ def get_movie():
                 except Exception as e:
                     log_message(f"  {era_label.capitalize()} {cinema_type}: {str(e)}", level="WARNING")
 
-        # Dedicated trending calls per regional language to boost variety
-        REGIONAL_LANGS = [("ta","Kollywood"),("te","Tollywood"),("ml","Mollywood"),("kn","Sandalwood")]
-        for lang, cinema in REGIONAL_LANGS:
+        # Dedicated trending calls — heavier boost for Tollywood and Bollywood
+        REGIONAL_LANGS = [("te","Tollywood",20),("hi","Bollywood",20),("ta","Kollywood",15),("ml","Mollywood",10)]
+        for lang, cinema, limit in REGIONAL_LANGS:
             try:
                 r = requests.get(
                     f"{TMDB_BASE_URL}/discover/movie",
@@ -768,12 +767,12 @@ def get_movie():
                     timeout=10,
                 )
                 if r.status_code == 200:
-                    for m in r.json().get("results", [])[:10]:
+                    for m in r.json().get("results", [])[:limit]:
                         m["_era"] = "recent"
                         m["_cinema_type"] = cinema
                         m["_language"] = lang
                         all_movies.append(m)
-                    log_message(f"  {cinema} boost: +{len(r.json().get('results',[])[:10])} films")
+                    log_message(f"  {cinema} boost: +{len(r.json().get('results',[])[:limit])} films")
             except Exception as e:
                 log_message(f"{cinema} boost failed: {e}", level="WARNING")
 
@@ -789,7 +788,7 @@ def get_movie():
                 trending_movies = trend_resp.json().get("results", [])[:12]
                 for m in trending_movies:
                     lang = m.get("original_language", "en")
-                    cinema_map = {"hi":"Bollywood","ta":"Kollywood","te":"Tollywood","ml":"Mollywood","kn":"Sandalwood"}
+                    cinema_map = {"hi":"Bollywood","ta":"Kollywood","te":"Tollywood","ml":"Mollywood"}
                     m["_era"] = "recent"
                     m["_cinema_type"] = cinema_map.get(lang, "Hollywood")
                     m["_language"] = lang
@@ -809,7 +808,7 @@ def get_movie():
         indian_count = sum(1 for m in unique_movies if m.get("_cinema_type") not in ("Hollywood", None))
         hollywood_count = sum(1 for m in unique_movies if m.get("_cinema_type") == "Hollywood")
         log_message(f"Merged pool: {len(unique_movies)} unique films ({indian_count} Indian, {hollywood_count} Hollywood)")
-        for cinema in ["Bollywood","Kollywood","Tollywood","Mollywood","Sandalwood"]:
+        for cinema in ["Tollywood","Bollywood","Kollywood","Mollywood"]:
             n = sum(1 for m in unique_movies if m.get("_cinema_type") == cinema)
             if n: log_message(f"  {cinema}: {n}")
 
@@ -820,18 +819,27 @@ def get_movie():
         # Shuffle for variety
         random.shuffle(unique_movies)
 
-        # Split into unposted pools — prefer Indian content (target audience is India)
-        INDIAN_TYPES = {"Bollywood", "Kollywood", "Tollywood", "Mollywood", "Sandalwood"}
-        unposted_indian = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in INDIAN_TYPES]
+        # Split pools — Tollywood+Bollywood are priority, other South secondary
+        PRIORITY_TYPES = {"Tollywood", "Bollywood"}
+        OTHER_SOUTH = {"Kollywood", "Mollywood"}
+        unposted_priority = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in PRIORITY_TYPES]
+        unposted_other_south = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in OTHER_SOUTH]
         unposted_hollywood = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Hollywood"]
 
-        log_message(f"Unposted pool: {len(unposted_indian)} Indian, {len(unposted_hollywood)} Hollywood")
+        log_message(f"Unposted pool: {len(unposted_priority)} Tollywood+Bollywood, {len(unposted_other_south)} other South, {len(unposted_hollywood)} Hollywood")
 
-        # 65% chance of Indian content; fall back to whatever is available
-        if unposted_indian and (not unposted_hollywood or random.random() < 0.65):
-            movie = unposted_indian[0]
+        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood
+        roll = random.random()
+        if unposted_priority and roll < 0.70:
+            movie = unposted_priority[0]
+        elif unposted_other_south and roll < 0.85:
+            movie = unposted_other_south[0]
         elif unposted_hollywood:
             movie = unposted_hollywood[0]
+        elif unposted_priority:
+            movie = unposted_priority[0]
+        elif unposted_other_south:
+            movie = unposted_other_south[0]
         else:
             movie = None
 
