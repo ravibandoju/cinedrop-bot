@@ -2413,14 +2413,6 @@ def main():
         raise
 
 
-if __name__ == "__main__":
-    import sys
-    if "--ott-list" in sys.argv:
-        main_ott_list()
-    else:
-        main()
-
-
 # ============================================================================
 # OTT WEEKLY LIST — separate flow, runs every Friday evening
 # ============================================================================
@@ -2812,3 +2804,11 @@ def main_ott_list():
     except Exception as e:
         log_message(f"OTT list post failed: {str(e)}", level="ERROR")
         raise
+
+
+if __name__ == "__main__":
+    import sys
+    if "--ott-list" in sys.argv:
+        main_ott_list()
+    else:
+        main()
