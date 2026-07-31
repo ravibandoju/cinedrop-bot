@@ -2461,64 +2461,96 @@ def main():
 
 def _search_ott_web() -> list[dict]:
     """
-    DuckDuckGo news/text search → Groq extraction of this week's Indian OTT film drops.
-    Returns a list of {title, platform, lang} dicts. Empty list on any failure.
+    Multi-source OTT discovery: DuckDuckGo news + free RSS feeds → Groq extraction.
+    Only targets this week's Indian OTT film releases.
+    Returns a list of {title, platform, lang} dicts.
     """
+    import xml.etree.ElementTree as ET
+
+    week_label = datetime.utcnow().strftime("%B %d %Y")
+    snippets = []
+
+    # Source A: DuckDuckGo news — fresher than text, last week only
     try:
         from duckduckgo_search import DDGS
-    except ImportError:
-        log_message("duckduckgo-search not installed; skipping web OTT pass", level="WARNING")
-        return []
-
-    week = datetime.utcnow().strftime("%B %d %Y")
-    queries = [
-        f"new movies Netflix India this week {week}",
-        f"new movies Prime Video Hotstar India this week {week}",
-        f"new Bollywood Hindi Tamil Telugu OTT release this week {week}",
-        f"new Korean movies OTT India this week {week}",
-        f"SonyLIV Zee5 JioCinema Aha new movie release this week {week}",
-    ]
-
-    snippets = []
-    try:
+        queries = [
+            f"new OTT movies India this week {week_label}",
+            f"Netflix Prime Video Hotstar new movies India {week_label}",
+            f"Telugu Hindi Tamil OTT streaming release this week",
+            f"Aha Zee5 SonyLIV JioCinema new movie release {week_label}",
+        ]
         with DDGS() as ddgs:
             for q in queries:
-                for r in ddgs.text(q, max_results=4, timelimit="m"):  # last month
-                    body = (r.get("body") or r.get("snippet") or "")[:400]
-                    if body:
-                        snippets.append(body)
+                try:
+                    for r in ddgs.news(q, max_results=5, timelimit="w"):  # last week
+                        body = (r.get("body") or r.get("title") or "")[:300]
+                        if body:
+                            snippets.append(body)
+                except Exception:
+                    pass
+    except ImportError:
+        log_message("duckduckgo-search not installed; skipping DDG news", level="WARNING")
     except Exception as e:
-        log_message(f"DuckDuckGo search error: {e}", level="WARNING")
-        return []
+        log_message(f"DuckDuckGo news error: {e}", level="WARNING")
+
+    # Source B: Free entertainment RSS feeds
+    OTT_KW = {"ott", "netflix", "prime", "hotstar", "zee5", "sonyliv", "jiocinema",
+              "aha", "lionsgate", "streaming", "digital release", "now streaming", "drops on"}
+    RSS_FEEDS = [
+        "https://www.bollywoodhungama.com/feed/",
+        "https://timesofindia.indiatimes.com/rss/4719148.cms",
+        "https://www.123telugu.com/feed",
+        "https://www.pinkvilla.com/feed",
+    ]
+    for feed_url in RSS_FEEDS:
+        try:
+            resp = requests.get(feed_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                for item in root.iter("item"):
+                    title_el = item.find("title")
+                    desc_el  = item.find("description")
+                    text = ""
+                    if title_el is not None and title_el.text:
+                        text += title_el.text + ". "
+                    if desc_el is not None and desc_el.text:
+                        clean = re.sub(r"<[^>]+>", " ", desc_el.text)[:200]
+                        text += clean
+                    if any(k in text.lower() for k in OTT_KW):
+                        snippets.append(text[:300])
+        except Exception as e:
+            log_message(f"RSS {feed_url} failed: {e}", level="WARNING")
+
+    log_message(f"OTT web search: {len(snippets)} snippets from DDG + RSS")
 
     if not snippets or not GROQ_API_KEY:
         return []
 
-    context = "\n---\n".join(snippets[:15])
+    context = "\n---\n".join(snippets[:25])
     try:
         client = Groq(api_key=GROQ_API_KEY)
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            max_tokens=600,
-            messages=[{"role": "user", "content": f"""These are web search snippets about new OTT releases in India this week/month.
+            max_tokens=700,
+            messages=[{"role": "user", "content": f"""These are news snippets and RSS items about Indian OTT releases this week ({week_label}).
 
 {context}
 
-Extract ONLY movies (not TV series/shows) that are confirmed new arrivals on Indian OTT platforms.
+Extract ONLY movies (not TV series/shows/web series) that dropped on Indian OTT platforms THIS WEEK.
 Return ONLY a valid JSON array, nothing else:
 [{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|JioHotstar|ZEE5|JioCinema|SonyLIV|Aha|Lionsgate Play|Apple TV+", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|Korean|English"}}]
 
 Rules:
-- Only include films explicitly mentioned in the snippets above
-- Do NOT fabricate or guess titles
-- Omit anything you're not sure is a movie (vs. a series)
-- Max 12 items"""}]
+- Only include films explicitly mentioned as releasing/streaming THIS WEEK in the text above
+- Do NOT fabricate or guess titles not in the text
+- Exclude TV shows, web series, documentaries
+- Max 15 items"""}]
         )
         raw = resp.choices[0].message.content.strip()
         m = re.search(r'\[.*?\]', raw, re.DOTALL)
         if m:
             parsed = json.loads(m.group())
-            log_message(f"Web OTT search extracted {len(parsed)} candidates")
+            log_message(f"Multi-source OTT search extracted {len(parsed)} candidates")
             return parsed if isinstance(parsed, list) else []
     except Exception as e:
         log_message(f"Groq OTT extraction failed: {e}", level="WARNING")
@@ -2558,6 +2590,25 @@ def get_new_ott_releases():
     films = []      # accumulates TMDB movie dicts
     seen  = set()   # dedup by tmdb id
 
+    # ── Source 0: TMDB now_playing with region=IN ─────────────────────────────
+    try:
+        r = requests.get(f"{TMDB_BASE_URL}/movie/now_playing", params={
+            "api_key": TMDB_API_KEY, "region": "IN", "language": "en-US", "page": 1,
+        }, timeout=10)
+        r.raise_for_status()
+        np_added = 0
+        for m in r.json().get("results", [])[:15]:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                lang = m.get("original_language", "en")
+                m["_cinema_type"] = "Indian" if lang in {"hi","ta","te","ml","kn"} else "Hollywood"
+                m["_date_source"] = "now_playing"
+                films.append(m)
+                np_added += 1
+        log_message(f"TMDB now_playing: +{np_added} films")
+    except Exception as e:
+        log_message(f"TMDB now_playing failed: {e}", level="WARNING")
+
     # ── Source 1: web search + Groq ──────────────────────────────────────────
     web_candidates = _search_ott_web()
     for item in web_candidates:
@@ -2575,9 +2626,9 @@ def get_new_ott_releases():
             films.append(movie)
     log_message(f"Web source: {len(films)} validated films")
 
-    # ── Source 2: TMDB digital release type (last 14 days) ───────────────────
+    # ── Source 2: TMDB digital release type (last 7 days) ────────────────────
     today    = datetime.utcnow().strftime("%Y-%m-%d")
-    week_ago = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%d")
+    week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
     BASE     = {"api_key": TMDB_API_KEY, "watch_region": "IN",
                 "with_watch_providers": INDIA_PROVIDERS, "language": "en-US",
                 "vote_count.gte": 5, "sort_by": "primary_release_date.desc", "page": 1}
