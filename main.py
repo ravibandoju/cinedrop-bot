@@ -2526,12 +2526,12 @@ def _search_ott_web() -> list[dict]:
 
     # Source C: Direct page scraping of OTT release listing pages
     RELEASE_PAGES = [
-        "https://www.91mobiles.com/hub/ott-releases-this-week/",
-        "https://ottplay.com/what-to-watch/new-releases",
-        "https://www.bollywoodhungama.com/ott-releases/",
-        "https://www.filmibeat.com/ott/new-releases/",
-        "https://www.123telugu.com/category/ott-releases/",
-        "https://www.pinkvilla.com/entertainment/ott/ott-releases-this-week",
+        "https://www.91mobiles.com/entertainment/ott-release-this-week",
+        "https://www.ottplay.com/ott-releases-streaming-now-this-week-watch-online",
+        "https://www.bollywoodhungama.com/latest-new-movies/",
+        "https://www.123telugu.com/videos/ott",
+        "https://trendraja.in/telugu-movie-ott-release-dates-2021/",
+        "https://www.pinkvilla.com/entertainment/south/ott-releases-this-week",
     ]
     UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
     for page_url in RELEASE_PAGES:
