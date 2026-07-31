@@ -2209,8 +2209,8 @@ def publish_to_story(image_url, post_permalink=None):
             "image_url": image_url,
             "media_type": "STORIES",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
-            # sticker_data adds a tappable link sticker (replaces the broken "link" field)
-            "sticker_data": json.dumps({"link": {"url": link_url}}),
+            # Instagram Graph API: sticker_data with link_sticker.link for tappable URL
+            "sticker_data": json.dumps({"link_sticker": {"link": link_url}}),
         }
         log_message(f"Story link sticker URL: {link_url}")
 
