@@ -1979,9 +1979,14 @@ def build_caption(content, movie, post_type):
     hashtag_block = content.get("hashtags", "")
     caption_body = add_caption_spice(caption_text, movie, post_type)
 
+    # Embed hashtags in caption so they're always visible even if first comment fails
+    if hashtag_block:
+        top_tags = " ".join(hashtag_block.split()[:25])
+        caption_body = caption_body + "\n\n" + top_tags
+
     # Respect Instagram's 2200 char limit without aggressive truncation
-    if len(caption_body) > 2000:
-        caption_body = caption_body[:2000].rsplit("\n", 1)[0].strip()
+    if len(caption_body) > 2200:
+        caption_body = caption_body[:2200].rsplit("\n", 1)[0].strip()
 
     log_message(f"Caption: {len(caption_body)} chars | Hashtags: {len(hashtag_block.split())} tags")
     return caption_body, hashtag_block
@@ -2029,13 +2034,8 @@ Rules:
         }
         hook = fallbacks.get(post_type, "tag karo kisi ko jo ye nahi dekha \ud83d\udc47")
 
-    # Brand tag first, then 7 most relevant — no 28-tag wall
-    all_tags  = hashtag_block.split() if hashtag_block else []
-    brand     = [t for t in all_tags if "cinedrop" in t.lower()]
-    rest      = [t for t in all_tags if "cinedrop" not in t.lower()][:7]
-    core_tags = " ".join(brand[:1] + rest)
-
-    return f"{hook}\n\n{core_tags}".strip()
+    # First comment is just the hook — hashtags are already in the caption
+    return hook.strip()
 
 
 def upload_card_for_instagram(card_path):
