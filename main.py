@@ -2485,7 +2485,7 @@ def _search_ott_web() -> list[dict]:
         with DDGS() as ddgs:
             for q in queries:
                 try:
-                    for r in ddgs.news(q, max_results=5, timelimit="w"):  # last week
+                    for r in ddgs.news(q, max_results=10, timelimit="w"):  # last week
                         body = (r.get("body") or r.get("title") or "")[:300]
                         if body:
                             snippets.append(body)
@@ -2541,8 +2541,8 @@ def _search_ott_web() -> list[dict]:
                 # Strip all HTML tags and collapse whitespace
                 page_text = re.sub(r"<[^>]+>", " ", pr.text)
                 page_text = re.sub(r"\s+", " ", page_text).strip()
-                # Take up to 2500 chars — enough to cover the listing section
-                snippets.append(f"[PAGE: {page_url}]\n{page_text[:2500]}")
+                # Take up to 6000 chars to get past navigation into actual listings
+                snippets.append(f"[PAGE: {page_url}]\n{page_text[:6000]}")
         except Exception as e:
             log_message(f"Page scrape {page_url} failed: {e}", level="WARNING")
 
@@ -2556,19 +2556,20 @@ def _search_ott_web() -> list[dict]:
         client = Groq(api_key=GROQ_API_KEY)
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            max_tokens=800,
+            max_tokens=1000,
             messages=[{"role": "user", "content": f"""You are looking at content from Indian OTT release listing pages and news snippets for the week of {week_label}.
 
 {context}
 
-Extract ONLY movies (not TV series/shows/web series) that dropped on Indian OTT platforms THIS WEEK.
+Extract movies AND web series that dropped on Indian OTT platforms THIS WEEK.
 Return ONLY a valid JSON array, nothing else:
-[{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|JioHotstar|ZEE5|JioCinema|SonyLIV|Aha|Lionsgate Play|Apple TV+", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|Korean|English"}}]
+[{{"title": "Exact Title", "platform": "Netflix|Prime Video|JioHotstar|ZEE5|JioCinema|SonyLIV|Aha|Lionsgate Play|Apple TV+", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|Korean|English", "type": "movie|series"}}]
 
 Rules:
-- Only include films explicitly mentioned as releasing/streaming THIS WEEK
+- Only include titles explicitly mentioned as releasing/streaming THIS WEEK
 - Do NOT fabricate or guess titles not visible in the text above
-- Exclude TV shows, web series, documentaries, short films
+- Include both films and web series/OTT originals
+- Exclude documentaries and reality shows
 - Prefer titles that appear in multiple sources
 - Max 15 items"""}]
         )
@@ -2646,9 +2647,11 @@ def get_new_ott_releases():
             seen.add(movie["id"])
             movie["_cinema_type"]  = "Indian" if movie.get("original_language","en") != "en" else "Hollywood"
             movie["_date_source"]  = "web"
-            # override language with Groq's extraction if TMDB language looks wrong
             lang_code = LANG_CODE.get(item.get("lang",""), movie.get("original_language","en"))
             movie["original_language"] = lang_code
+            # store Groq-extracted platform as fallback for provider confirmation
+            if item.get("platform"):
+                movie["_groq_platform"] = item["platform"]
             films.append(movie)
     log_message(f"Web source: {len(films)} validated films")
 
@@ -2729,6 +2732,9 @@ def get_new_ott_releases():
                 for p in wp.get("flatrate", [])
             ]
             m["_platforms"] = [p for p in providers if p][:2]
+            # TMDB provider data lags for new releases — fall back to Groq-extracted platform
+            if not m["_platforms"] and m.get("_groq_platform"):
+                m["_platforms"] = [m["_groq_platform"]]
             if m["_platforms"]:
                 confirmed.append(m)
         except Exception:
@@ -2951,8 +2957,20 @@ def main_ott_list():
         # Short engagement hook as first comment (no hashtag repeat)
         post_first_comment(post_id, "save this — tag someone who needs a watch plan this weekend")
 
+        # Story — link sticker points back to the feed post
+        post_permalink = get_post_permalink(post_id)
+        story_id = None
+        try:
+            story_card_path = create_story_card(card_path, {"id": "ott_list"}, "list", post_permalink=post_permalink)
+            if story_card_path:
+                story_public_url = upload_card_for_instagram(story_card_path)
+                if story_public_url:
+                    story_id = publish_to_story(story_public_url, post_permalink=post_permalink)
+        except Exception as e:
+            log_message(f"OTT list story failed: {str(e)} — main post unaffected", level="WARNING")
+
         log_message("=" * 80)
-        log_message(f"OTT LIST POST SUCCESS — {len(films)} films | Post ID: {post_id}")
+        log_message(f"OTT LIST POST SUCCESS — {len(films)} films | Post ID: {post_id} | Story: {story_id or 'failed'}")
         log_message("=" * 80)
 
     except Exception as e:
