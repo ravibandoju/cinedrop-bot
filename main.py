@@ -2867,14 +2867,54 @@ def render_ott_list_card(films):
 
 
 def generate_ott_caption(films):
-    """Caption is just hashtags — clean, discoverable, no filler text."""
-    return (
-        "#cinedrop #newonott #ottrelease #weekendwatch #ottindia "
-        "#netflixindia #primevideoindia #jiocinemanow #disneyplushotstar "
-        "#sonylivoriginals #zee5 #bollywood #kollywood #tollywood "
-        "#streamingwatch #ottwatch #weekendwatchlist #bingelist "
-        "#koreanmovies #worldcinema #cinephile"
+    """Description with movie names + hashtags for reach."""
+    lines = ["🎬 OTT Releases This Week\n"]
+    for f in films:
+        title   = f.get("title", "")
+        plats   = f.get("_platforms", [])
+        plat_str = " · ".join(plats) if plats else ""
+        lines.append(f"▸ {title}" + (f"  ({plat_str})" if plat_str else ""))
+    lines.append("\nSave this & plan your weekend watch 🍿")
+
+    # Dynamic tags based on actual langs / platforms in the list
+    lang_tags = {
+        "te": "#tollywood #telugumovies",
+        "hi": "#bollywood #hindicinema",
+        "ta": "#kollywood #tamilmovies",
+        "ml": "#mollywood #malayalammovies",
+        "en": "#hollywood #englishmovies",
+        "ko": "#koreanmovies #kdrama",
+    }
+    plat_tags = {
+        "Netflix":          "#netflixindia",
+        "Amazon Prime Video": "#primevideoindia",
+        "JioCinema":        "#jiocinemanow",
+        "Disney+ Hotstar":  "#hotstar",
+        "SonyLIV":          "#sonyliv",
+        "ZEE5":             "#zee5",
+        "Apple TV+":        "#appletv",
+        "Mubi":             "#mubi",
+    }
+
+    seen_lang_tags, seen_plat_tags = set(), set()
+    for f in films:
+        tag = lang_tags.get(f.get("original_language", ""))
+        if tag:
+            seen_lang_tags.add(tag)
+        for p in f.get("_platforms", []):
+            pt = plat_tags.get(p)
+            if pt:
+                seen_plat_tags.add(pt)
+
+    base_tags = (
+        "#cinedrop #newonott #ottrelease #ottindia #weekendwatch "
+        "#streamingwatch #ottwatch #weekendwatchlist #bingelist #cinephile "
+        "#indiefilms #worldcinema #newmovies2025 #mustwatch #moviestowatch"
     )
+    dynamic = " ".join(sorted(seen_lang_tags) + sorted(seen_plat_tags))
+    tags = (base_tags + " " + dynamic).strip()
+
+    return "\n".join(lines) + "\n\n" + tags
 
 
 def main_ott_list():
