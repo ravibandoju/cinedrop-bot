@@ -2204,12 +2204,15 @@ def publish_to_story(image_url, post_permalink=None):
 
         # Step 1: Create story media container
         container_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media"
+        link_url = post_permalink or "https://www.instagram.com/cinedrop.01/"
         container_payload = {
             "image_url": image_url,
             "media_type": "STORIES",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
-            "link": post_permalink or "https://www.instagram.com/cinedrop.01/",
+            # sticker_data adds a tappable link sticker (replaces the broken "link" field)
+            "sticker_data": json.dumps({"link": {"url": link_url}}),
         }
+        log_message(f"Story link sticker URL: {link_url}")
 
         container_resp = requests.post(
             container_url,
@@ -2783,10 +2786,21 @@ def render_ott_list_card(films):
     h1_w = h1_bbox[2] - h1_bbox[0]
     draw.text(((CARD_WIDTH - h1_w) // 2, 40), header1, font=fonts["title"], fill=(245, 245, 250))
 
-    header2 = "THIS WEEK  🇮🇳"
+    header2 = "THIS WEEK"
     h2_bbox = draw.textbbox((0, 0), header2, font=fonts["medium"])
     h2_w = h2_bbox[2] - h2_bbox[0]
-    draw.text(((CARD_WIDTH - h2_w) // 2, 160), header2, font=fonts["medium"], fill=ORANGE)
+    h2_x = (CARD_WIDTH - h2_w) // 2
+    draw.text((h2_x, 160), header2, font=fonts["medium"], fill=ORANGE)
+    # Draw small India tricolor flag after the text
+    flag_x = h2_x + h2_w + 16
+    flag_y = 165
+    fw, fh = 52, 34
+    draw.rectangle([(flag_x, flag_y),          (flag_x + fw, flag_y + fh // 3)],     fill=(255, 103, 0))   # saffron
+    draw.rectangle([(flag_x, flag_y + fh//3),  (flag_x + fw, flag_y + 2*fh//3)],    fill=(255, 255, 255)) # white
+    draw.rectangle([(flag_x, flag_y + 2*fh//3),(flag_x + fw, flag_y + fh)],          fill=(19, 136, 8))    # green
+    # Ashoka chakra dot
+    cx, cy = flag_x + fw // 2, flag_y + fh // 2
+    draw.ellipse([(cx - 5, cy - 5), (cx + 5, cy + 5)], fill=(0, 0, 128))
 
     # Divider
     draw.rectangle([(60, 230), (CARD_WIDTH - 60, 233)], fill=DIVIDER)
@@ -2841,7 +2855,7 @@ def render_ott_list_card(films):
     bar_y = CARD_HEIGHT - 70
     draw.rectangle([(0, bar_y), (CARD_WIDTH, CARD_HEIGHT)], fill=ORANGE)
     draw.text((54, bar_y + 20), "@cinedrop", font=fonts["medium"], fill=(255, 255, 255))
-    save_text = "save this 🔖"
+    save_text = "save this"
     s_w = draw.textbbox((0, 0), save_text, font=fonts["small"])[2]
     draw.text((CARD_WIDTH - s_w - 54, bar_y + 26), save_text, font=fonts["small"], fill=(255, 255, 255))
 
@@ -2895,7 +2909,7 @@ def main_ott_list():
         post_id = publish_to_instagram(public_image_url, caption, alt_text=alt_text)
 
         # Short engagement hook as first comment (no hashtag repeat)
-        post_first_comment(post_id, "save this 🔖 tag someone who needs a watch plan this weekend 🎬")
+        post_first_comment(post_id, "save this — tag someone who needs a watch plan this weekend")
 
         log_message("=" * 80)
         log_message(f"OTT LIST POST SUCCESS — {len(films)} films | Post ID: {post_id}")
