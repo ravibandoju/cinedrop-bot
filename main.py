@@ -2521,18 +2521,40 @@ def _search_ott_web() -> list[dict]:
         except Exception as e:
             log_message(f"RSS {feed_url} failed: {e}", level="WARNING")
 
-    log_message(f"OTT web search: {len(snippets)} snippets from DDG + RSS")
+    # Source C: Direct page scraping of OTT release listing pages
+    RELEASE_PAGES = [
+        "https://www.91mobiles.com/hub/ott-releases-this-week/",
+        "https://ottplay.com/what-to-watch/new-releases",
+        "https://www.bollywoodhungama.com/ott-releases/",
+        "https://www.filmibeat.com/ott/new-releases/",
+        "https://www.123telugu.com/category/ott-releases/",
+        "https://www.pinkvilla.com/entertainment/ott/ott-releases-this-week",
+    ]
+    UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    for page_url in RELEASE_PAGES:
+        try:
+            pr = requests.get(page_url, timeout=10, headers={"User-Agent": UA})
+            if pr.status_code == 200:
+                # Strip all HTML tags and collapse whitespace
+                page_text = re.sub(r"<[^>]+>", " ", pr.text)
+                page_text = re.sub(r"\s+", " ", page_text).strip()
+                # Take up to 2500 chars — enough to cover the listing section
+                snippets.append(f"[PAGE: {page_url}]\n{page_text[:2500]}")
+        except Exception as e:
+            log_message(f"Page scrape {page_url} failed: {e}", level="WARNING")
+
+    log_message(f"OTT web search: {len(snippets)} snippets from DDG news + RSS + page scrapes")
 
     if not snippets or not GROQ_API_KEY:
         return []
 
-    context = "\n---\n".join(snippets[:25])
+    context = "\n---\n".join(snippets[:30])
     try:
         client = Groq(api_key=GROQ_API_KEY)
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            max_tokens=700,
-            messages=[{"role": "user", "content": f"""These are news snippets and RSS items about Indian OTT releases this week ({week_label}).
+            max_tokens=800,
+            messages=[{"role": "user", "content": f"""You are looking at content from Indian OTT release listing pages and news snippets for the week of {week_label}.
 
 {context}
 
@@ -2541,9 +2563,10 @@ Return ONLY a valid JSON array, nothing else:
 [{{"title": "Exact Movie Title", "platform": "Netflix|Prime Video|JioHotstar|ZEE5|JioCinema|SonyLIV|Aha|Lionsgate Play|Apple TV+", "lang": "Hindi|Tamil|Telugu|Malayalam|Kannada|Korean|English"}}]
 
 Rules:
-- Only include films explicitly mentioned as releasing/streaming THIS WEEK in the text above
-- Do NOT fabricate or guess titles not in the text
-- Exclude TV shows, web series, documentaries
+- Only include films explicitly mentioned as releasing/streaming THIS WEEK
+- Do NOT fabricate or guess titles not visible in the text above
+- Exclude TV shows, web series, documentaries, short films
+- Prefer titles that appear in multiple sources
 - Max 15 items"""}]
         )
         raw = resp.choices[0].message.content.strip()
