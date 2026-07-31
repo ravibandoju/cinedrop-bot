@@ -2789,18 +2789,7 @@ def render_ott_list_card(films):
     header2 = "THIS WEEK"
     h2_bbox = draw.textbbox((0, 0), header2, font=fonts["medium"])
     h2_w = h2_bbox[2] - h2_bbox[0]
-    h2_x = (CARD_WIDTH - h2_w) // 2
-    draw.text((h2_x, 160), header2, font=fonts["medium"], fill=ORANGE)
-    # Draw small India tricolor flag after the text
-    flag_x = h2_x + h2_w + 16
-    flag_y = 165
-    fw, fh = 52, 34
-    draw.rectangle([(flag_x, flag_y),          (flag_x + fw, flag_y + fh // 3)],     fill=(255, 103, 0))   # saffron
-    draw.rectangle([(flag_x, flag_y + fh//3),  (flag_x + fw, flag_y + 2*fh//3)],    fill=(255, 255, 255)) # white
-    draw.rectangle([(flag_x, flag_y + 2*fh//3),(flag_x + fw, flag_y + fh)],          fill=(19, 136, 8))    # green
-    # Ashoka chakra dot
-    cx, cy = flag_x + fw // 2, flag_y + fh // 2
-    draw.ellipse([(cx - 5, cy - 5), (cx + 5, cy + 5)], fill=(0, 0, 128))
+    draw.text(((CARD_WIDTH - h2_w) // 2, 160), header2, font=fonts["medium"], fill=ORANGE)
 
     # Divider
     draw.rectangle([(60, 230), (CARD_WIDTH - 60, 233)], fill=DIVIDER)
@@ -2824,26 +2813,37 @@ def render_ott_list_card(films):
         # Index number
         draw.text((54, row_y + 22), f"{i+1}.", font=fonts["medium"], fill=IDX_COL)
 
-        # Title
-        title_lines = _wrap_text(draw, title.upper(), fonts["medium"], CARD_WIDTH - 200)
-        draw.text((110, row_y + 18), title_lines[0] if title_lines else title.upper(),
-                  font=fonts["medium"], fill=TITLE_COL)
+        # Title — downsize to body font if it wraps at medium size
+        MAX_TITLE_W = CARD_WIDTH - 164
+        title_upper = title.upper()
+        t_lines = _wrap_text(draw, title_upper, fonts["medium"], MAX_TITLE_W)
+        if len(t_lines) > 1:
+            t_font = fonts["body"]
+            t_lines = _wrap_text(draw, title_upper, t_font, MAX_TITLE_W)
+            title_y = row_y + 22
+        else:
+            t_font = fonts["medium"]
+            title_y = row_y + 18
+        draw.text((110, title_y), t_lines[0], font=t_font, fill=TITLE_COL)
+        if len(t_lines) > 1:
+            draw.text((110, title_y + 38), t_lines[1], font=t_font, fill=TITLE_COL)
 
-        # Year + language badge on second line
-        badge_y = row_y + 68
-        draw.text((110, badge_y), f"{year}  ·  {lang_label}", font=fonts["small"], fill=META_COL)
+        # Meta line: always below title — pushed down enough to clear longest title
+        meta_y = row_y + 86
+        draw.text((110, meta_y), f"{year}  ·  {lang_label}", font=fonts["small"], fill=META_COL)
 
-        # Platform pills right-aligned
+        # Platform pills right-aligned on meta baseline
         pill_x = CARD_WIDTH - 54
         for plat in reversed(platforms):
             pc = PLATFORM_COLORS.get(plat, (100, 100, 120))
             short = plat.replace("Lionsgate Play", "Lionsgate")
             pb = draw.textbbox((0, 0), short, font=fonts["tiny"])
             pw = pb[2] - pb[0] + 20
+            ph = pb[3] - pb[1] + 10
             pill_x -= pw
-            draw.rounded_rectangle([(pill_x, row_y + 22), (pill_x + pw, row_y + 54)],
-                                    radius=14, fill=pc)
-            draw.text((pill_x + 10, row_y + 27), short, font=fonts["tiny"],
+            draw.rounded_rectangle([(pill_x, meta_y - 2), (pill_x + pw, meta_y + ph)],
+                                    radius=10, fill=pc)
+            draw.text((pill_x + 10, meta_y + 1), short, font=fonts["tiny"],
                       fill=(255, 255, 255) if plat != "Apple TV+" else (0, 0, 0))
             pill_x -= 10
 
