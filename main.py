@@ -2774,9 +2774,10 @@ def get_new_ott_releases():
             movie["_date_source"]  = "web"
             lang_code = LANG_CODE.get(item.get("lang",""), movie.get("original_language","en"))
             movie["original_language"] = lang_code
-            # store Groq-extracted platform as fallback for provider confirmation
-            if item.get("platform"):
-                movie["_groq_platform"] = item["platform"]
+            # only store Groq platform if it's a known name (Groq sometimes returns "Unknown")
+            raw_plat = item.get("platform", "")
+            if raw_plat and raw_plat in PROVIDER_MAPPING.values():
+                movie["_groq_platform"] = raw_plat
             films.append(movie)
     log_message(f"Web source: {len(films)} validated films")
 
@@ -2856,7 +2857,8 @@ def get_new_ott_releases():
                 PROVIDER_MAPPING.get(p["provider_id"], p.get("provider_name", ""))
                 for p in wp.get("flatrate", [])
             ]
-            m["_platforms"] = [p for p in providers if p][:2]
+            seen_p = dict.fromkeys(p for p in providers if p)  # dedup, preserve order
+            m["_platforms"] = list(seen_p)[:2]
             # TMDB provider data lags for new releases — fall back to Groq-extracted platform
             if not m["_platforms"] and m.get("_groq_platform"):
                 m["_platforms"] = [m["_groq_platform"]]
