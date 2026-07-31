@@ -143,6 +143,8 @@ POST_TYPE_BY_DAY = {
 PROVIDER_MAPPING = {
     8:   "Netflix",
     119: "Prime Video",
+    9:   "Prime Video",   # legacy Amazon ID
+    2100: "Prime Video",  # Prime Video with Ads
     35:  "Apple TV+",
     122: "JioHotstar",
     232: "Zee5",
@@ -797,6 +799,105 @@ def get_movie():
         except Exception as e:
             log_message(f"India trending fetch failed: {e}", level="WARNING")
 
+        # Source: TMDB /movie/popular — current crowd favourites per language
+        for lang, cinema in [("te","Tollywood"),("hi","Bollywood"),("ta","Kollywood"),("ml","Mollywood"),("en","Hollywood")]:
+            try:
+                r = requests.get(
+                    f"{TMDB_BASE_URL}/movie/popular",
+                    params={"api_key": TMDB_API_KEY, "language": "en-US",
+                            "region": "IN" if lang != "en" else "US", "page": 1},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    added = 0
+                    for m in r.json().get("results", []):
+                        if m.get("original_language") == lang:
+                            m["_era"] = "recent"
+                            m["_cinema_type"] = cinema
+                            m["_language"] = lang
+                            all_movies.append(m)
+                            added += 1
+                    log_message(f"  Popular ({cinema}): +{added}")
+            except Exception as e:
+                log_message(f"Popular ({cinema}) failed: {e}", level="WARNING")
+
+        # Source: TMDB /movie/top_rated — all-time greats (feeds the classic 30%)
+        for lang, cinema in [("te","Tollywood"),("hi","Bollywood"),("ta","Kollywood"),("ml","Mollywood"),("en","Hollywood")]:
+            try:
+                r = requests.get(
+                    f"{TMDB_BASE_URL}/movie/top_rated",
+                    params={"api_key": TMDB_API_KEY, "language": "en-US",
+                            "region": "IN" if lang != "en" else "US", "page": 1},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    added = 0
+                    for m in r.json().get("results", []):
+                        if m.get("original_language") == lang:
+                            yr = int(m.get("release_date", "0")[:4] or 0)
+                            m["_era"] = "classic" if yr < 1995 else ("modern" if yr < 2016 else "recent")
+                            m["_cinema_type"] = cinema
+                            m["_language"] = lang
+                            all_movies.append(m)
+                            added += 1
+                    log_message(f"  Top-rated ({cinema}): +{added}")
+            except Exception as e:
+                log_message(f"Top-rated ({cinema}) failed: {e}", level="WARNING")
+
+        # Source: Groq LLM → TMDB search (AI-curated suggestions by genre + era)
+        if GROQ_API_KEY:
+            try:
+                genre_name = today_genre["name"]
+                current_year = datetime.now().year
+                groq_prompt = (
+                    f"List 10 highly acclaimed {genre_name} films from Indian cinema "
+                    f"(Telugu, Hindi, Tamil, Malayalam, Kannada) released between "
+                    f"{current_year - 3} and {current_year}. "
+                    f"Also add 3 all-time Indian classics in this genre (pre-2000). "
+                    f"Return ONLY a JSON array of English movie titles, nothing else. "
+                    f'Example: ["Movie One","Movie Two"]'
+                )
+                groq_resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [{"role": "user", "content": groq_prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 300,
+                    },
+                    timeout=15,
+                )
+                if groq_resp.status_code == 200:
+                    raw = groq_resp.json()["choices"][0]["message"]["content"].strip()
+                    json_match = re.search(r'\[.*?\]', raw, re.DOTALL)
+                    if json_match:
+                        suggested_titles = json.loads(json_match.group())
+                        log_message(f"  Groq suggested {len(suggested_titles)} {genre_name} titles")
+                        _cmap = {"hi":"Bollywood","ta":"Kollywood","te":"Tollywood","ml":"Mollywood","kn":"Tollywood"}
+                        for title in suggested_titles[:13]:
+                            try:
+                                sr = requests.get(
+                                    f"{TMDB_BASE_URL}/search/movie",
+                                    params={"api_key": TMDB_API_KEY, "query": title,
+                                            "language": "en-US", "page": 1},
+                                    timeout=8,
+                                )
+                                if sr.status_code == 200:
+                                    hits = sr.json().get("results", [])
+                                    if hits:
+                                        m = hits[0]
+                                        lang = m.get("original_language", "en")
+                                        yr = int(m.get("release_date", "0")[:4] or 0)
+                                        m["_era"] = "classic" if yr < 1995 else ("modern" if yr < 2016 else "recent")
+                                        m["_cinema_type"] = _cmap.get(lang, "Hollywood")
+                                        m["_language"] = lang
+                                        all_movies.append(m)
+                            except Exception:
+                                pass
+            except Exception as e:
+                log_message(f"Groq movie suggestions failed: {e}", level="WARNING")
+
         # Deduplicate by movie ID
         seen_ids = set()
         unique_movies = []
@@ -819,6 +920,20 @@ def get_movie():
         # Shuffle for variety
         random.shuffle(unique_movies)
 
+        # Era-biased weighted picker: ~70% recent (last 3 years), ~30% older/classic
+        recent_cutoff = datetime.now().year - 3
+        def _pick_era_biased(pool):
+            if not pool:
+                return None
+            weights = []
+            for m in pool:
+                try:
+                    yr = int(m.get("release_date", "0")[:4])
+                except (ValueError, TypeError):
+                    yr = 0
+                weights.append(7 if yr >= recent_cutoff else 3)
+            return random.choices(pool, weights=weights, k=1)[0]
+
         # Split pools — Tollywood+Bollywood are priority, other South secondary
         PRIORITY_TYPES = {"Tollywood", "Bollywood"}
         OTHER_SOUTH = {"Kollywood", "Mollywood"}
@@ -828,18 +943,18 @@ def get_movie():
 
         log_message(f"Unposted pool: {len(unposted_priority)} Tollywood+Bollywood, {len(unposted_other_south)} other South, {len(unposted_hollywood)} Hollywood")
 
-        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood
+        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias applied within each pool)
         roll = random.random()
         if unposted_priority and roll < 0.70:
-            movie = unposted_priority[0]
+            movie = _pick_era_biased(unposted_priority)
         elif unposted_other_south and roll < 0.85:
-            movie = unposted_other_south[0]
+            movie = _pick_era_biased(unposted_other_south)
         elif unposted_hollywood:
-            movie = unposted_hollywood[0]
+            movie = _pick_era_biased(unposted_hollywood)
         elif unposted_priority:
-            movie = unposted_priority[0]
+            movie = _pick_era_biased(unposted_priority)
         elif unposted_other_south:
-            movie = unposted_other_south[0]
+            movie = _pick_era_biased(unposted_other_south)
         else:
             movie = None
 
@@ -907,10 +1022,20 @@ def get_streaming_platforms(movie_id):
                 provider_data = results[region_code]
                 providers = provider_data.get("flatrate", [])
                 
+                seen = set()
                 for provider in providers:
-                    provider_name = PROVIDER_MAPPING.get(provider["provider_id"], provider.get("provider_name", "Unknown"))
-                    streaming_platforms[region_code].append(provider_name)
-                
+                    name = PROVIDER_MAPPING.get(provider["provider_id"], "")
+                    # skip unknown IDs whose raw name contains "ads" or is empty
+                    if not name:
+                        raw = provider.get("provider_name", "")
+                        if "with Ads" in raw or "Ads" in raw:
+                            name = raw.split(" with ")[0].strip()
+                        else:
+                            name = raw.strip()
+                    if name and name not in seen:
+                        seen.add(name)
+                        streaming_platforms[region_code].append(name)
+
                 log_message(f"{region} ({region_code}): {', '.join(streaming_platforms[region_code]) or 'No streaming data'}")
 
         return streaming_platforms
