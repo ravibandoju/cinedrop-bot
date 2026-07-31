@@ -2598,7 +2598,7 @@ def _search_ott_web() -> list[dict]:
     week_label = datetime.utcnow().strftime("%B %d %Y")
     snippets = []
 
-    # Source A: DuckDuckGo news — fresher than text, last week only
+    # Source A: DuckDuckGo news + web search — live results for this week
     try:
         from duckduckgo_search import DDGS
         queries = [
@@ -2610,16 +2610,29 @@ def _search_ott_web() -> list[dict]:
         with DDGS() as ddgs:
             for q in queries:
                 try:
-                    for r in ddgs.news(q, max_results=10, timelimit="w"):  # last week
+                    for r in ddgs.news(q, max_results=10, timelimit="w"):
                         body = (r.get("body") or r.get("title") or "")[:300]
                         if body:
                             snippets.append(body)
                 except Exception:
                     pass
+            # Web search gives broader coverage beyond news articles
+            web_queries = [
+                f"OTT releases this week India {week_label} site:ottplay.com OR site:bollywoodhungama.com OR site:pinkvilla.com",
+                f"movies streaming now India {week_label} Netflix Hotstar Prime Zee5",
+            ]
+            for q in web_queries:
+                try:
+                    for r in ddgs.text(q, max_results=8, timelimit="w"):
+                        body = (r.get("body") or r.get("title") or "")[:400]
+                        if body:
+                            snippets.append(body)
+                except Exception:
+                    pass
     except ImportError:
-        log_message("duckduckgo-search not installed; skipping DDG news", level="WARNING")
+        log_message("duckduckgo-search not installed; skipping DDG search", level="WARNING")
     except Exception as e:
-        log_message(f"DuckDuckGo news error: {e}", level="WARNING")
+        log_message(f"DuckDuckGo search error: {e}", level="WARNING")
 
     # Source B: Free entertainment RSS feeds
     OTT_KW = {"ott", "netflix", "prime", "hotstar", "zee5", "sonyliv", "jiocinema",
@@ -2676,7 +2689,7 @@ def _search_ott_web() -> list[dict]:
     if not snippets or not GROQ_API_KEY:
         return []
 
-    context = "\n---\n".join(snippets[:30])
+    context = "\n---\n".join(snippets[:40])
     try:
         client = Groq(api_key=GROQ_API_KEY)
         resp = client.chat.completions.create(
