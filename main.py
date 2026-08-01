@@ -2306,8 +2306,20 @@ def build_caption(content, movie, post_type):
     hashtag_block = content.get("hashtags", "")
     caption_body = add_caption_spice(caption_text, movie, post_type)
 
-    # Saves are weighted heavily by the algorithm — always nudge for one
-    caption_body = caption_body + "\n\n📌 save this for later"
+    # Saves AND shares are weighted heaviest by the algorithm — nudge for both,
+    # rotating the wording so it never reads the same two posts running.
+    share_ctas = [
+        "📌 save this · 📤 send it to whoever you'd watch it with",
+        "📤 share with your movie buddy · 📌 save it for the weekend",
+        "know someone who'd love this? send it their way 📤 — and save it 📌",
+        "📌 bookmark this one · tag the friend you'd drag to watch it",
+        "save this for later 📌 · share it with your watchlist gang 📤",
+    ]
+    try:
+        cta_idx = (int(movie.get("id", 0)) + datetime.utcnow().weekday()) % len(share_ctas)
+    except (ValueError, TypeError):
+        cta_idx = datetime.utcnow().weekday() % len(share_ctas)
+    caption_body = caption_body + "\n\n" + share_ctas[cta_idx]
 
     # Embed a small, focused hashtag set in the caption (first comment repeats the hook)
     if hashtag_block:
@@ -2354,13 +2366,13 @@ Rules:
 
     if not hook:
         fallbacks = {
-            "recommendation": "agar ye miss kiya toh seriously kya dekha hai \ud83e\udd26",
-            "hot_take":       "ek baar dekho phir bolna \u2014 aaj bhi stand by my take",
-            "dialogue":       "kuch lines hoti hain jo literally aapke saath rehti hain",
-            "mood_pick":      "sahi mood mein dekho ye \u2014 trust me on this",
-            "trivia":         "ye fact mujhe bhi recently pata chala aur main shocked tha",
-            "list":           "ye list maine 2 baje banaya tha \u2014 ab aapke kaam aayega",
-            "rating":         "honest review mein darrta nahi \u2014 agree karo ya na karo",
+            "recommendation": "agar ye miss kiya toh seriously kya dekha hai \ud83e\udd26 tag karo apne movie buddy ko",
+            "hot_take":       "ek baar dekho phir bolna \u2014 agree ya disagree? comment karo",
+            "dialogue":       "kuch lines saath rehti hain \u2014 send this to jise ye film yaad dila degi",
+            "mood_pick":      "sahi mood mein dekho ye \u2014 aur bhej do usko jiske saath dekhna hai",
+            "trivia":         "ye fact mujhe bhi recently pata chala \u2014 share karo kisi film nerd ke saath",
+            "list":           "ye list save kar lo \u2014 aur tag karo weekend plan wale dost ko",
+            "rating":         "honest review \u2014 agree karo ya na, comment mein batao",
         }
         hook = fallbacks.get(post_type, "tag karo kisi ko jo ye nahi dekha \ud83d\udc47")
 
