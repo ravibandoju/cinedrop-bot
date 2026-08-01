@@ -1134,20 +1134,21 @@ def get_movie():
                     return m
             return best or local_ok[0]
 
-        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias within each).
-        # But ~1 in 8 days, feature an unmissable world-cinema masterpiece instead.
+        # ~50% Tollywood/Bollywood, ~13% other South, ~22% Hollywood, ~15% world.
+        # Every pool is cross-validated the same way, so English gets a fair rotation.
         roll = random.random()
-        if unposted_world and random.random() < 0.15:
+        if unposted_world and random.random() < 0.13:
             primary = unposted_world
             log_message("World-cinema day — featuring an unmissable global masterpiece")
-        elif unposted_priority and roll < 0.70:
+        elif unposted_priority and roll < 0.50:
             primary = unposted_priority
-        elif unposted_other_south and roll < 0.85:
+        elif unposted_other_south and roll < 0.63:
             primary = unposted_other_south
-        elif unposted_hollywood:
+        elif unposted_hollywood and roll < 0.85:
             primary = unposted_hollywood
+            log_message("Hollywood day — featuring an acclaimed English film")
         else:
-            primary = unposted_priority or unposted_other_south or unposted_hollywood or unposted_world
+            primary = unposted_priority or unposted_hollywood or unposted_other_south or unposted_world
 
         if not primary:
             log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
@@ -3478,14 +3479,11 @@ def get_new_ott_releases():
                 log_message(f"TMDB proxy pass failed ({label}): {e}", level="WARNING")
 
     # ── Confirm each film is actually streaming in India right now ────────────
-    # Indian films first, then Hollywood, then verify provider
-    films.sort(key=lambda x: (0 if x.get("_cinema_type") == "Indian" else 1,
-                               0 if x.get("_date_source") == "web" else 1))
+    # Web-sourced first (freshest), then bucket confirmed films by language so the
+    # final list always reserves slots for English/other — never an all-Indian list.
+    films.sort(key=lambda x: 0 if x.get("_date_source") == "web" else 1)
 
-    confirmed = []
-    for m in films:
-        if len(confirmed) >= 8:
-            break
+    def _confirm_provider(m):
         try:
             wp = requests.get(
                 f"{TMDB_BASE_URL}/movie/{m['id']}/watch/providers",
@@ -3500,12 +3498,37 @@ def get_new_ott_releases():
             # TMDB provider data lags for new releases — fall back to Groq-extracted platform
             if not m["_platforms"] and m.get("_groq_platform"):
                 m["_platforms"] = [m["_groq_platform"]]
-            if m["_platforms"]:
-                confirmed.append(m)
+            return bool(m["_platforms"])
         except Exception:
-            pass
+            return False
 
-    log_message(f"OTT final list: {len(confirmed)} confirmed (sources: "
+    indian_c, english_c, other_c = [], [], []
+    checks = 0
+    for m in films:
+        if checks >= 24 or (len(indian_c) + len(english_c) + len(other_c)) >= 12:
+            break
+        checks += 1
+        if not _confirm_provider(m):
+            continue
+        lang = m.get("original_language", "en")
+        if lang == "en":
+            english_c.append(m)
+        elif lang in {"hi", "ta", "te", "ml", "kn"}:
+            indian_c.append(m)
+        else:
+            other_c.append(m)
+
+    # Compose up to 8: mostly Indian, but always surface English + one world title when present.
+    confirmed = indian_c[:5] + english_c[:2] + other_c[:1]
+    for pool in (indian_c[5:], english_c[2:], other_c[1:]):   # backfill any empty slots
+        for m in pool:
+            if len(confirmed) >= 8:
+                break
+            confirmed.append(m)
+    confirmed = confirmed[:8]
+
+    log_message(f"OTT final list: {len(confirmed)} confirmed "
+                f"(Indian={len(indian_c)}, English={len(english_c)}, world={len(other_c)}; sources: "
                 f"web={sum(1 for m in confirmed if m.get('_date_source')=='web')}, "
                 f"digital={sum(1 for m in confirmed if m.get('_date_source')=='digital')}, "
                 f"proxy={sum(1 for m in confirmed if m.get('_date_source')=='proxy')})")
