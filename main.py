@@ -233,6 +233,19 @@ MOOD_TAGS = {
     "Family": ["#sundayfilm","#familytime","#hometheatre"],
 }
 
+# Small, specific, low-competition tags a growing account can actually rank in.
+# Leading with these lets a small post surface in a tag's "Top" grid — the
+# initial traction that makes Instagram show it to non-followers.
+NICHE_TAGS = {
+    "hi": ["#hindicinemalovers","#bollywoodgems","#desifilmbuff"],
+    "ta": ["#tamilcinemalovers","#kollywoodgems","#tamilfilmbuff"],
+    "te": ["#telugucinemalovers","#tollywoodgems","#telugufilmbuff"],
+    "ml": ["#malayalamcinemalovers","#mollywoodgems","#keralafilmbuff"],
+    "kn": ["#kannadacinemalovers","#sandalwoodgems","#kannadafilmbuff"],
+    "en": ["#hollywoodgems","#filmbuffcommunity","#cinephilecommunity"],
+}
+WORLD_NICHE_TAGS = ["#worldcinemalovers","#foreignfilmbuff","#subtitledcinema","#globalcinema"]
+
 # India Standard Time (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -589,6 +602,9 @@ def generate_hashtags(movie, post_type):
         # --- Layer 3: Cinema/language community ---
         cinema = CINEMA_TAGS.get(original_language, CINEMA_TAGS.get("en", []))
 
+        # --- Layer 3b: Niche/low-competition (reachable for a small account) ---
+        niche = NICHE_TAGS.get(original_language, WORLD_NICHE_TAGS)
+
         # --- Layer 4: Era ---
         era_list = ERA_TAGS.get(era, [])
 
@@ -615,13 +631,16 @@ def generate_hashtags(movie, post_type):
         type_list = POST_TYPE_TAGS.get(post_type, POST_TYPE_TAGS.get("recommendation", []))
 
         # --- Combine all layers with priority ordering ---
-        # Instagram 2025+ deprioritises hashtag-stuffed posts. A tight, highly
-        # relevant set of ~8 outperforms a 28-tag dump for reach and looks less spammy.
+        # Small-account strategy: lead with the film itself + small niche tags
+        # (where the post can actually rank), then a spread of medium community/
+        # genre tags, and only 1 broad discovery tag. A size-mixed set of ~9
+        # beats both a broad-only set and a 28-tag spam dump for real reach.
         all_tags = (
-            trending[:2] +
             film_tags[:1] +
-            cinema[:2] +
-            genre_list[:2] +
+            niche[:3] +
+            trending[:1] +
+            cinema[:1] +
+            genre_list[:1] +
             mood_list[:1] +
             type_list[:1]
         )
@@ -635,8 +654,8 @@ def generate_hashtags(movie, post_type):
                 seen.add(tag)
                 final_tags.append(tag)
 
-        # Cap at 8 — focused and relevant beats broad and spammy
-        final_tags = final_tags[:8]
+        # Cap at 9 — a focused, size-mixed set beats broad-and-spammy
+        final_tags = final_tags[:9]
 
         log_message(f"Hashtags built: {len(final_tags)} tags · trending={len(trending)} · era={era} · genre={genre_name}")
         return " ".join(final_tags)
@@ -648,9 +667,10 @@ def generate_hashtags(movie, post_type):
             original_language = movie.get("original_language", "en")
             genre_name = movie.get("_genre_name", "Drama")
             cinema = CINEMA_TAGS.get(original_language, [])
+            niche = NICHE_TAGS.get(original_language, WORLD_NICHE_TAGS)
             genre_list = GENRE_TAGS.get(genre_name, [])
             type_list = POST_TYPE_TAGS.get(post_type, [])
-            fallback = (cinema[:3] + genre_list[:3] + type_list[:2])
+            fallback = (niche[:3] + cinema[:2] + genre_list[:2] + type_list[:2])
             seen = set()
             final = []
             for tag in fallback:
