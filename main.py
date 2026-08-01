@@ -2423,31 +2423,40 @@ def upload_card_for_instagram(card_path):
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-        # Check if file already exists — need SHA to update existing file
-        existing_sha = None
-        check = requests.get(api_url, headers=headers, timeout=10)
-        if check.status_code == 200:
-            existing_sha = check.json().get("sha")
+        # Retry on 409: the file SHA can change between our GET and PUT (stale SHA race).
+        # Re-fetch the latest SHA each attempt so the update targets the current blob.
+        resp = None
+        for attempt in range(4):
+            existing_sha = None
+            check = requests.get(api_url, headers=headers, timeout=10)
+            if check.status_code == 200:
+                existing_sha = check.json().get("sha")
 
-        body = {
-            "message": f"Auto: card {datetime.utcnow().strftime('%Y-%m-%d')}",
-            "content": image_b64,
-            "branch":  branch,
-        }
-        if existing_sha:
-            body["sha"] = existing_sha
+            body = {
+                "message": f"Auto: card {datetime.utcnow().strftime('%Y-%m-%d')}",
+                "content": image_b64,
+                "branch":  branch,
+            }
+            if existing_sha:
+                body["sha"] = existing_sha
 
-        resp = requests.put(api_url, headers=headers, json=body, timeout=30)
+            resp = requests.put(api_url, headers=headers, json=body, timeout=30)
 
-        if resp.status_code in (200, 201):
-            # jsDelivr serves GitHub content via a CDN that Instagram accepts
-            commit_sha = resp.json().get("commit", {}).get("sha", branch)
-            public_url = f"https://cdn.jsdelivr.net/gh/{repo}@{commit_sha}/{file_path}"
-            log_message(f"Card uploaded successfully: {public_url}")
-            return public_url
-        else:
-            log_message(f"GitHub Contents API failed: {resp.status_code} {resp.text}", level="ERROR")
-            return None
+            if resp.status_code in (200, 201):
+                # jsDelivr serves GitHub content via a CDN that Instagram accepts
+                commit_sha = resp.json().get("commit", {}).get("sha", branch)
+                public_url = f"https://cdn.jsdelivr.net/gh/{repo}@{commit_sha}/{file_path}"
+                log_message(f"Card uploaded successfully: {public_url}")
+                return public_url
+
+            if resp.status_code == 409 and attempt < 3:
+                log_message(f"Card upload SHA conflict (409), retrying {attempt + 1}/3...", level="WARNING")
+                time.sleep(1.5)
+                continue
+            break
+
+        log_message(f"GitHub Contents API failed: {resp.status_code} {resp.text}", level="ERROR")
+        return None
 
     except Exception as e:
         log_message(f"Card upload error: {str(e)}", level="ERROR")
