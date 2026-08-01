@@ -63,7 +63,19 @@ OPENSANS_BOLD = str(FONT_DIR / "OpenSans-Bold.ttf")
 POSTED_MOVIES_FILE = Path("posted_movies.json")
 TEMP_DIR = Path("/tmp" if os.name != "nt" else os.getenv("TEMP", "./temp"))
 CARDS_DIR = Path("cards")
-ASSETS_DIR = Path("assets")   # optional bundled reel audio lives here
+ASSETS_DIR = Path("assets")   # bundled royalty-free reel audio lives here
+
+# Reel audio credits. FreePD shut down, so tracks are Kevin MacLeod (incompetech.com)
+# under CC BY 4.0 — attribution is required, so it's appended to the Reel caption
+# whenever one of these plays. Keys match the filenames in assets/.
+AUDIO_CREDITS = {
+    "Meditation_Impromptu_01.mp3": "Meditation Impromptu 01",
+    "Dreamy_Flashback.mp3":        "Dreamy Flashback",
+    "Deep_Haze.mp3":               "Deep Haze",
+    "Angel_Share.mp3":             "Angel Share",
+}
+# Set by create_reel_video for the current run; consumed when building the caption
+LAST_REEL_AUDIO_CREDIT = ""
 
 # Cache the SHA of the history file
 _HISTORY_FILE_SHA = None
@@ -2658,14 +2670,25 @@ def create_reel_video(image_path, duration=8):
         audio_present = bool(music_files)
         if audio_present:
             track = random.choice(music_files)
-            cmd += ["-i", str(track)]
+            # Start at a random offset so the same track yields a fresh 8s slice each post.
+            # Synthesized fallback is only ~duration long, so it always starts at 0.
+            start = 0.0
+            global LAST_REEL_AUDIO_CREDIT
+            credit = AUDIO_CREDITS.get(track.name)
+            if credit:
+                start = round(random.uniform(0.0, 45.0), 1)
+                LAST_REEL_AUDIO_CREDIT = f"♫ {credit} — Kevin MacLeod (incompetech.com), CC BY 4.0"
+            else:
+                LAST_REEL_AUDIO_CREDIT = ""
+            cmd += ["-ss", str(start), "-i", str(track)]
             # warm it slightly, gentle fades so it never cuts abruptly
             audio_filter = (
                 f"lowpass=f=1800,afade=t=in:st=0:d=1,"
                 f"afade=t=out:st={max(0.1, duration - 1.5)}:d=1.5,volume=0.85"
             )
-            audio_src = f"music:{track.name}"
+            audio_src = f"music:{track.name}@{start}s"
         else:
+            LAST_REEL_AUDIO_CREDIT = ""
             audio_src = "none"
 
         cmd += ["-vf", vf, "-t", str(duration), "-r", str(fps),
@@ -3095,7 +3118,10 @@ def main():
                 if reel_url:
                     log_message("Waiting for GitHub CDN to serve the video...")
                     time.sleep(20)
-                    post_id = publish_reel_to_instagram(reel_url, caption_body)
+                    reel_caption = caption_body
+                    if LAST_REEL_AUDIO_CREDIT:
+                        reel_caption = f"{caption_body}\n\n{LAST_REEL_AUDIO_CREDIT}"
+                    post_id = publish_reel_to_instagram(reel_url, reel_caption)
                     if post_id:
                         posted_as_reel = True
                         media_url = reel_url
