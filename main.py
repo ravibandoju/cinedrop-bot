@@ -142,6 +142,18 @@ POST_TYPE_BY_DAY = {
     6: "rating",           # Sunday
 }
 
+# Named recurring series — a fixed banner per post type builds the return-viewer
+# habit (people learn "Sunday = verdict") which converts one-time reach into follows.
+SERIES_BY_TYPE = {
+    "recommendation": "🎬 MONDAY PICK",
+    "hot_take":       "🔥 HOT TAKE TUESDAY",
+    "dialogue":       "💬 DIALOGUE WEDNESDAY",
+    "mood_pick":      "🌙 MOOD THURSDAY",
+    "trivia":         "🎭 FRIDAY FILM TRIVIA",
+    "list":           "📋 WATCHLIST SATURDAY",
+    "rating":         "⭐ SUNDAY VERDICT",
+}
+
 # Streaming provider IDs (corrected mapping)
 PROVIDER_MAPPING = {
     8:   "Netflix",
@@ -2305,6 +2317,11 @@ def build_caption(content, movie, post_type):
 
     hashtag_block = content.get("hashtags", "")
     caption_body = add_caption_spice(caption_text, movie, post_type)
+
+    # Lead every caption with its recurring series banner for brand recall
+    series = SERIES_BY_TYPE.get(post_type)
+    if series:
+        caption_body = f"{series}\n\n{caption_body}"
 
     # Saves AND shares are weighted heaviest by the algorithm — nudge for both,
     # rotating the wording so it never reads the same two posts running.
