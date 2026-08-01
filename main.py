@@ -2294,7 +2294,8 @@ def create_reel_video(image_path, duration=8):
     Reels get far more reach than static images, so the daily post tries this first.
     Requires ffmpeg (preinstalled on GitHub Actions runners). If ffmpeg is missing
     or encoding fails, returns None so the caller falls back to a static image post.
-    Muxes assets/reel_audio.mp3 if present; otherwise posts silent.
+    Audio: uses assets/reel_audio.mp3 if present, otherwise synthesizes a soft
+    royalty-free ambient chord pad with ffmpeg (open source, no API, no copyright).
     """
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -2312,20 +2313,45 @@ def create_reel_video(image_path, duration=8):
             f"s=1080x1920:fps={fps},format=yuv420p"
         )
         audio_path = ASSETS_DIR / "reel_audio.mp3"
-        has_audio = audio_path.exists()
-
         cmd = [ffmpeg, "-y", "-i", image_path]
-        if has_audio:
+        audio_filter = None
+
+        if audio_path.exists():
+            # Bundled track takes priority if the user ever adds one
             cmd += ["-i", str(audio_path)]
+            audio_src = "file"
+        else:
+            # Synthesize a soft ambient chord pad — 100% ffmpeg, no API, no licensing.
+            # Rotate the chord by weekday so daily Reels don't all sound identical.
+            chords = [
+                (130.81, 164.81, 196.00),  # C major
+                (110.00, 130.81, 164.81),  # A minor
+                (146.83, 185.00, 220.00),  # D major
+                (98.00,  123.47, 146.83),  # G major
+                (123.47, 155.56, 185.00),  # B minor colour
+                (116.54, 146.83, 174.61),  # Bb major
+                (164.81, 196.00, 246.94),  # E minor colour
+            ]
+            f1, f2, f3 = chords[datetime.utcnow().weekday() % len(chords)]
+            expr = (f"0.13*sin(2*PI*{f1}*t)+0.12*sin(2*PI*{f2}*t)"
+                    f"+0.10*sin(2*PI*{f3}*t)+0.05*sin(2*PI*{f1 * 2}*t)")
+            cmd += ["-f", "lavfi", "-i", f"aevalsrc=exprs={expr}:d={duration}:s=44100"]
+            audio_filter = (
+                f"tremolo=f=0.2:d=0.5,lowpass=f=1500,aecho=0.8:0.88:70:0.25,"
+                f"afade=t=in:st=0:d=1.5,afade=t=out:st={duration - 1.5}:d=1.5,volume=1.3"
+            )
+            audio_src = "synth"
+
         cmd += ["-vf", vf, "-t", str(duration), "-r", str(fps),
                 "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart"]
-        if has_audio:
-            cmd += ["-c:a", "aac", "-b:a", "128k", "-map", "0:v", "-map", "1:a", "-shortest"]
-        cmd += [out_path]
+        if audio_filter:
+            cmd += ["-af", audio_filter]
+        cmd += ["-c:a", "aac", "-b:a", "128k",
+                "-map", "0:v", "-map", "1:a", "-shortest", out_path]
 
         subprocess.run(cmd, check=True, capture_output=True, timeout=180)
-        log_message(f"Reel video created: {out_path} (audio={'yes' if has_audio else 'no'})")
+        log_message(f"Reel video created: {out_path} (audio={audio_src})")
         return out_path
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "ignore")[-500:]
