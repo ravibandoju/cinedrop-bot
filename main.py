@@ -2509,6 +2509,60 @@ def publish_to_instagram(image_url, caption, alt_text=""):
         raise
 
 
+def _synthesize_calm_wav(path, duration=8, sample_rate=44100):
+    """
+    Generate a gentle, randomized lo-fi melody as a WAV using only the standard
+    library (no deps, no API, no copyright). Notes are drawn from a pentatonic
+    scale — which is always consonant — so a random sequence still sounds calm
+    and musical, and it's different every post.
+    """
+    import wave, math, struct
+    from array import array
+
+    scales = [
+        [261.63, 293.66, 329.63, 392.00, 440.00],  # C major pentatonic
+        [220.00, 261.63, 293.66, 329.63, 392.00],  # A minor pentatonic
+        [196.00, 220.00, 261.63, 293.66, 349.23],  # G major pentatonic
+        [174.61, 196.00, 220.00, 261.63, 293.66],  # F major pentatonic
+        [293.66, 329.63, 392.00, 440.00, 523.25],  # D major pentatonic
+    ]
+    scale = random.choice(scales)
+    root = min(scale) / 2.0                      # soft bass pad an octave down
+    note_dur = random.uniform(0.5, 0.7)          # relaxed tempo
+    total = int(duration * sample_rate)
+    fade = int(1.5 * sample_rate)
+    n_steps = int(math.ceil(duration / note_dur)) + 1
+    seq = [random.choice(scale) for _ in range(n_steps)]
+
+    samples = array("h")
+    two_pi = 2.0 * math.pi
+    for i in range(total):
+        t = i / sample_rate
+        pos = t / note_dur
+        step = int(pos)
+        frac = pos - step
+        freq = seq[step % len(seq)]
+        env = math.sin(math.pi * frac)           # 0→1→0 per note: soft pluck, no clicks
+        val = 0.18 * env * math.sin(two_pi * freq * t)
+        val += 0.05 * math.sin(two_pi * root * t)
+        if i < fade:
+            val *= i / fade
+        elif i > total - fade:
+            val *= max(0.0, (total - i) / fade)
+        if val > 1.0:
+            val = 1.0
+        elif val < -1.0:
+            val = -1.0
+        samples.append(int(val * 32767 * 0.9))
+
+    with wave.open(path, "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(samples.tobytes())
+    return path
+
+
 def create_reel_video(image_path, duration=8):
     """
     Turn a still 1080x1920 frame into a Ken Burns (slow zoom) MP4 for Reels.
@@ -2516,8 +2570,9 @@ def create_reel_video(image_path, duration=8):
     Requires ffmpeg (preinstalled on GitHub Actions runners). If ffmpeg is missing
     or encoding fails, returns None so the caller falls back to a static image post.
     Audio: if any music files exist in assets/ (*.mp3/*.m4a/*.wav) one is picked at
-    random. Otherwise ffmpeg synthesizes a soft, calm two-note pad (open source, no
-    API, no copyright). Drop a few calm tracks in assets/ and the bot rotates them.
+    random. Otherwise a fresh, randomized calm pentatonic melody is synthesized with
+    the standard library (open source, no API, no copyright) — different every post.
+    Drop a few calm tracks in assets/ to use real music instead.
     """
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -2545,41 +2600,38 @@ def create_reel_video(image_path, duration=8):
         # Ignore any legacy placeholder name that isn't real music
         music_files = [m for m in music_files if m.name != "reel_audio.mp3" or m.stat().st_size > 1024]
 
-        if music_files:
+        # No bundled track — synthesize a fresh, randomized calm melody each time
+        if not music_files:
+            synth_path = str(CARDS_DIR / "reel_music.wav")
+            try:
+                _synthesize_calm_wav(synth_path, duration=duration)
+                music_files = [Path(synth_path)]
+            except Exception as e:
+                log_message(f"Music synthesis failed: {e} — Reel will be silent", level="WARNING")
+
+        audio_present = bool(music_files)
+        if audio_present:
             track = random.choice(music_files)
             cmd += ["-i", str(track)]
-            # gentle fade-out so it never cuts abruptly
-            audio_filter = f"afade=t=in:st=0:d=1,afade=t=out:st={duration - 1.5}:d=1.5,volume=0.9"
-            audio_src = f"file:{track.name}"
-        else:
-            # Calm, minimal fallback: a soft sustained two-note pad (root + fifth).
-            # Rotate the note pair by weekday so daily Reels aren't identical.
-            pairs = [
-                (98.00,  146.83),  # G2 + D3
-                (110.00, 164.81),  # A2 + E3
-                (130.81, 196.00),  # C3 + G3
-                (146.83, 220.00),  # D3 + A3
-                (123.47, 185.00),  # B2 + F#3
-                (116.54, 174.61),  # Bb2 + F3
-                (87.31,  130.81),  # F2 + C3
-            ]
-            root, fifth = pairs[datetime.utcnow().weekday() % len(pairs)]
-            expr = f"0.16*sin(2*PI*{root}*t)+0.10*sin(2*PI*{fifth}*t)"
-            cmd += ["-f", "lavfi", "-i", f"aevalsrc=exprs={expr}:d={duration}:s=44100"]
-            # heavy low-pass keeps it warm and calm; slow fades; low background volume
+            # warm it slightly, gentle fades so it never cuts abruptly
             audio_filter = (
-                f"lowpass=f=700,tremolo=f=0.1:d=0.2,"
-                f"afade=t=in:st=0:d=2,afade=t=out:st={duration - 2}:d=2,volume=0.6"
+                f"lowpass=f=1800,afade=t=in:st=0:d=1,"
+                f"afade=t=out:st={max(0.1, duration - 1.5)}:d=1.5,volume=0.85"
             )
-            audio_src = "synth-calm"
+            audio_src = f"music:{track.name}"
+        else:
+            audio_src = "none"
 
         cmd += ["-vf", vf, "-t", str(duration), "-r", str(fps),
                 "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart"]
-        if audio_filter:
-            cmd += ["-af", audio_filter]
-        cmd += ["-c:a", "aac", "-b:a", "128k",
-                "-map", "0:v", "-map", "1:a", "-shortest", out_path]
+        if audio_present:
+            if audio_filter:
+                cmd += ["-af", audio_filter]
+            cmd += ["-c:a", "aac", "-b:a", "128k",
+                    "-map", "0:v", "-map", "1:a", "-shortest", out_path]
+        else:
+            cmd += ["-map", "0:v", out_path]
 
         subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         log_message(f"Reel video created: {out_path} (audio={audio_src})")
