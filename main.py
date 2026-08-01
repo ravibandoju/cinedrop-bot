@@ -11,6 +11,8 @@ import time
 import base64
 import random
 import re
+import shutil
+import subprocess
 import requests
 import textwrap
 from datetime import datetime, timezone, timedelta
@@ -61,6 +63,7 @@ OPENSANS_BOLD = str(FONT_DIR / "OpenSans-Bold.ttf")
 POSTED_MOVIES_FILE = Path("posted_movies.json")
 TEMP_DIR = Path("/tmp" if os.name != "nt" else os.getenv("TEMP", "./temp"))
 CARDS_DIR = Path("cards")
+ASSETS_DIR = Path("assets")   # optional bundled reel audio lives here
 
 # Cache the SHA of the history file
 _HISTORY_FILE_SHA = None
@@ -612,16 +615,15 @@ def generate_hashtags(movie, post_type):
         type_list = POST_TYPE_TAGS.get(post_type, POST_TYPE_TAGS.get("recommendation", []))
 
         # --- Combine all layers with priority ordering ---
+        # Instagram 2025+ deprioritises hashtag-stuffed posts. A tight, highly
+        # relevant set of ~8 outperforms a 28-tag dump for reach and looks less spammy.
         all_tags = (
-            trending[:3] +
-            film_tags[:2] +
-            cinema[:3] +
-            era_list[:2] +
-            genre_list[:3] +
-            mood_list[:2] +
-            quality_tags[:2] +
-            global_list[:3] +
-            type_list[:2]
+            trending[:2] +
+            film_tags[:1] +
+            cinema[:2] +
+            genre_list[:2] +
+            mood_list[:1] +
+            type_list[:1]
         )
 
         # --- Deduplicate preserving priority order ---
@@ -633,8 +635,8 @@ def generate_hashtags(movie, post_type):
                 seen.add(tag)
                 final_tags.append(tag)
 
-        # Cap at 28 — feels human, avoids spam flag
-        final_tags = final_tags[:28]
+        # Cap at 8 — focused and relevant beats broad and spammy
+        final_tags = final_tags[:8]
 
         log_message(f"Hashtags built: {len(final_tags)} tags · trending={len(trending)} · era={era} · genre={genre_name}")
         return " ".join(final_tags)
@@ -1859,13 +1861,14 @@ def render_d2(movie, streaming_platforms):
     return _save_card(card, movie["id"])
 
 
-def create_story_card(feed_card_path, movie, post_type, post_permalink=None):
+def create_story_card(feed_card_path, movie, post_type, post_permalink=None,
+                      cta_lines=None, filename_prefix="story"):
     """
-    Create a Story-optimized version of the feed card.
-    Stories are 1080x1920px (9:16).
+    Create a Story/Reel-optimized version of the feed card.
+    Output is 1080x1920px (9:16).
     Places the feed card centered on a blurred dark background.
-    Adds a top label and bottom swipe-up prompt.
-    Returns path to story card image.
+    Adds a top label and bottom CTA (overridable via cta_lines).
+    Returns path to the generated image.
     """
     try:
         log_message("Creating Story card...")
@@ -1939,11 +1942,12 @@ def create_story_card(feed_card_path, movie, post_type, post_permalink=None):
             fill=COLOR_SAFFRON
         )
 
-        # CTA lines — guide viewers to the actual feed post
-        cta_lines = [
-            "full post in our feed 👆",
-            "@cinedrop.01"
-        ]
+        # CTA lines — default guides Story viewers to the feed post; reels override this
+        if cta_lines is None:
+            cta_lines = [
+                "full post in our feed 👆",
+                "@cinedrop.01"
+            ]
 
         cta_y = STORY_HEIGHT - 220
 
@@ -1968,7 +1972,7 @@ def create_story_card(feed_card_path, movie, post_type, post_permalink=None):
 
         # Save story card
         CARDS_DIR.mkdir(exist_ok=True)
-        story_path = CARDS_DIR / f"story_{movie['id']}_{post_type}.jpg"
+        story_path = CARDS_DIR / f"{filename_prefix}_{movie['id']}_{post_type}.jpg"
         story.save(str(story_path), "JPEG", quality=95)
         log_message(f"Story card saved: {story_path}")
         return str(story_path)
@@ -2110,9 +2114,12 @@ def build_caption(content, movie, post_type):
     hashtag_block = content.get("hashtags", "")
     caption_body = add_caption_spice(caption_text, movie, post_type)
 
-    # Embed hashtags in caption so they're always visible even if first comment fails
+    # Saves are weighted heavily by the algorithm — always nudge for one
+    caption_body = caption_body + "\n\n📌 save this for later"
+
+    # Embed a small, focused hashtag set in the caption (first comment repeats the hook)
     if hashtag_block:
-        top_tags = " ".join(hashtag_block.split()[:25])
+        top_tags = " ".join(hashtag_block.split()[:8])
         caption_body = caption_body + "\n\n" + top_tags
 
     # Respect Instagram's 2200 char limit without aggressive truncation
@@ -2279,6 +2286,119 @@ def publish_to_instagram(image_url, caption, alt_text=""):
         if resp is not None:
             log_message(f"Instagram API response: {resp.text}", level="ERROR")
         raise
+
+
+def create_reel_video(image_path, duration=8):
+    """
+    Turn a still 1080x1920 frame into a Ken Burns (slow zoom) MP4 for Reels.
+    Reels get far more reach than static images, so the daily post tries this first.
+    Requires ffmpeg (preinstalled on GitHub Actions runners). If ffmpeg is missing
+    or encoding fails, returns None so the caller falls back to a static image post.
+    Muxes assets/reel_audio.mp3 if present; otherwise posts silent.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log_message("ffmpeg not found — skipping Reel, will post static image", level="WARNING")
+        return None
+    try:
+        out_path = str(CARDS_DIR / "reel.mp4")
+        fps = 30
+        frames = duration * fps
+        # Scale up first so zoompan motion stays smooth, then slow zoom-in to 1.15x
+        vf = (
+            f"scale=2160:3840,"
+            f"zoompan=z='min(zoom+0.00035,1.15)':d={frames}:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"s=1080x1920:fps={fps},format=yuv420p"
+        )
+        audio_path = ASSETS_DIR / "reel_audio.mp3"
+        has_audio = audio_path.exists()
+
+        cmd = [ffmpeg, "-y", "-i", image_path]
+        if has_audio:
+            cmd += ["-i", str(audio_path)]
+        cmd += ["-vf", vf, "-t", str(duration), "-r", str(fps),
+                "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart"]
+        if has_audio:
+            cmd += ["-c:a", "aac", "-b:a", "128k", "-map", "0:v", "-map", "1:a", "-shortest"]
+        cmd += [out_path]
+
+        subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+        log_message(f"Reel video created: {out_path} (audio={'yes' if has_audio else 'no'})")
+        return out_path
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or b"").decode("utf-8", "ignore")[-500:]
+        log_message(f"Reel encoding failed: {err} — falling back to image", level="WARNING")
+        return None
+    except Exception as e:
+        log_message(f"Reel video creation failed: {e} — falling back to image", level="WARNING")
+        return None
+
+
+def publish_reel_to_instagram(video_url, caption):
+    """
+    Publish a Reel from a public video URL. Reels must finish server-side encoding
+    before publishing, so this polls the container status until FINISHED.
+    Returns the post ID, or None so the caller can fall back to a static image post.
+    """
+    if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_ACCOUNT_ID:
+        return None
+    try:
+        log_message("Publishing Reel to Instagram...")
+        container_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media"
+        payload = {
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "share_to_feed": "true",   # also show in the grid/feed, not just Reels tab
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+        }
+        r = requests.post(container_url, data=payload, timeout=30)
+        r.raise_for_status()
+        cid = r.json().get("id")
+        if not cid:
+            log_message(f"Reel container creation failed: {r.json()}", level="ERROR")
+            return None
+        log_message(f"Reel container created: {cid} — waiting for encoding")
+
+        # Poll until FINISHED (up to ~100s) — publishing early returns an error
+        status_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{cid}"
+        finished = False
+        for attempt in range(20):
+            time.sleep(5)
+            s = requests.get(status_url, params={
+                "fields": "status_code",
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            }, timeout=15)
+            code = s.json().get("status_code")
+            log_message(f"Reel status [{attempt+1}/20]: {code}")
+            if code == "FINISHED":
+                finished = True
+                break
+            if code == "ERROR":
+                log_message(f"Reel processing errored: {s.json()}", level="ERROR")
+                return None
+        if not finished:
+            log_message("Reel not ready in time — falling back to image", level="WARNING")
+            return None
+
+        publish_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+        p = requests.post(publish_url, data={
+            "creation_id": cid,
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+        }, timeout=30)
+        p.raise_for_status()
+        post_id = p.json().get("id")
+        if post_id:
+            log_message(f"Reel published! Post ID: {post_id}")
+        return post_id
+    except requests.RequestException as e:
+        log_message(f"Reel publish error: {e}", level="ERROR")
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            log_message(f"Reel API response: {resp.text}", level="ERROR")
+        return None
 
 
 def post_first_comment(post_id, comment_text):
@@ -2503,23 +2623,49 @@ def main():
             log_message("Could not generate card. Exiting.", level="ERROR")
             return
 
-        # Upload to GitHub via Contents API for Instagram publishing
-        public_image_url = upload_card_for_instagram(card_path)
-        if not public_image_url:
-            log_message("Image upload failed. Exiting.", level="ERROR")
-            return
-
-        # Wait for GitHub CDN to serve the image
-        log_message("Waiting for GitHub CDN to serve the image...")
-        time.sleep(20)
-        log_message("Image ready for Instagram publishing")
-
         caption_body, hashtag_block = build_caption(content, movie, post_type)
         alt_text = (
             f"{movie_title} ({movie.get('release_date', '')[:4]}) "
             f"{movie.get('_genre_name', '')} — film card by @cinedrop"
         ).strip()
-        post_id = publish_to_instagram(public_image_url, caption_body, alt_text=alt_text)
+
+        # --- REEL-FIRST STRATEGY ---
+        # Video Reels get dramatically more reach than static images on Instagram —
+        # the single biggest lever for growing a small account. Build a 9:16 Ken Burns
+        # video from the card and post it as a Reel (share_to_feed=true so it also lands
+        # in the grid). If anything fails, fall back to a static single-image post.
+        post_id = None
+        posted_as_reel = False
+        media_url = None
+        try:
+            reel_frame = create_story_card(
+                card_path, movie, post_type,
+                cta_lines=["follow for daily films 🎬", "@cinedrop.01"],
+                filename_prefix="reel",
+            )
+            reel_video = create_reel_video(reel_frame) if reel_frame else None
+            if reel_video:
+                reel_url = upload_card_for_instagram(reel_video)
+                if reel_url:
+                    log_message("Waiting for GitHub CDN to serve the video...")
+                    time.sleep(20)
+                    post_id = publish_reel_to_instagram(reel_url, caption_body)
+                    if post_id:
+                        posted_as_reel = True
+                        media_url = reel_url
+        except Exception as e:
+            log_message(f"Reel flow failed: {e} — falling back to static image", level="WARNING")
+
+        # Fallback: static single-image post
+        if not post_id:
+            media_url = upload_card_for_instagram(card_path)
+            if not media_url:
+                log_message("Image upload failed. Exiting.", level="ERROR")
+                return
+            log_message("Waiting for GitHub CDN to serve the image...")
+            time.sleep(20)
+            log_message("Image ready for Instagram publishing")
+            post_id = publish_to_instagram(media_url, caption_body, alt_text=alt_text)
 
         # Post first comment — engaging hook + curated hashtags (not a raw tag dump)
         first_comment = build_first_comment(movie, post_type, hashtag_block)
@@ -2573,13 +2719,14 @@ def main():
         log_message("=" * 80)
         log_message(f"Movie        : {movie_title} ({movie.get('release_date', '')[:4]})")
         log_message(f"Post Type    : {post_type.upper()}")
+        log_message(f"Format       : {'REEL (video)' if posted_as_reel else 'IMAGE (static)'}")
         log_message(f"Cinema       : {movie.get('original_language', 'en').upper()}")
         log_message(f"Rating       : {movie.get('vote_average', 0)}/10")
         log_message(f"🇮🇳 India     : {', '.join(streaming_platforms['IN']) or 'Not streaming'}")
         log_message(f"🇺🇸 US        : {', '.join(streaming_platforms['US']) or 'Not streaming'}")
         log_message(f"Post ID      : {post_id}")
         log_message(f"Story ID     : {story_id if story_id else 'failed'}")
-        log_message(f"Card         : {public_image_url}")
+        log_message(f"Media        : {media_url}")
         log_message("=" * 80)
 
     except Exception as e:
