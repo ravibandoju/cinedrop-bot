@@ -2511,12 +2511,12 @@ def publish_to_instagram(image_url, caption, alt_text=""):
 
 def _synthesize_calm_wav(path, duration=8, sample_rate=44100):
     """
-    Generate a gentle, randomized lo-fi melody as a WAV using only the standard
-    library (no deps, no API, no copyright). Notes are drawn from a pentatonic
-    scale — which is always consonant — so a random sequence still sounds calm
-    and musical, and it's different every post.
+    Generate a soothing, randomized lo-fi track as a WAV using only the standard
+    library (no deps, no API, no copyright). A warm arpeggiated melody over a soft
+    chord pad, drawn from a pentatonic scale (always consonant), with gentle reverb
+    and a slow breathing tremolo. Random scale/tempo/sequence — different every post.
     """
-    import wave, math, struct
+    import wave, math
     from array import array
 
     scales = [
@@ -2527,33 +2527,70 @@ def _synthesize_calm_wav(path, duration=8, sample_rate=44100):
         [293.66, 329.63, 392.00, 440.00, 523.25],  # D major pentatonic
     ]
     scale = random.choice(scales)
-    root = min(scale) / 2.0                      # soft bass pad an octave down
-    note_dur = random.uniform(0.5, 0.7)          # relaxed tempo
+    root = min(scale) / 2.0                       # soft bass pad an octave down
+    pad_notes = [root, scale[1], scale[3]]        # gentle sustained triad-ish chord
+    note_dur = random.uniform(0.42, 0.6)          # relaxed tempo
+    lfo_hz = random.uniform(0.08, 0.16)           # slow "breathing" amplitude
     total = int(duration * sample_rate)
-    fade = int(1.5 * sample_rate)
-    n_steps = int(math.ceil(duration / note_dur)) + 1
+    two_pi = 2.0 * math.pi
+
+    n_steps = int(math.ceil(duration / note_dur)) + 2
     seq = [random.choice(scale) for _ in range(n_steps)]
 
-    samples = array("h")
-    two_pi = 2.0 * math.pi
+    # --- build the dry signal: warm melody + soft chord pad + breathing tremolo ---
+    buf = [0.0] * total
     for i in range(total):
         t = i / sample_rate
         pos = t / note_dur
         step = int(pos)
         frac = pos - step
         freq = seq[step % len(seq)]
-        env = math.sin(math.pi * frac)           # 0→1→0 per note: soft pluck, no clicks
-        val = 0.18 * env * math.sin(two_pi * freq * t)
-        val += 0.05 * math.sin(two_pi * root * t)
+        env = math.sin(math.pi * frac) ** 1.5     # soft pluck, silent at note edges
+        tone = (math.sin(two_pi * freq * t)
+                + 0.25 * math.sin(two_pi * 2 * freq * t)
+                + 0.10 * math.sin(two_pi * 3 * freq * t))
+        melody = 0.16 * env * tone
+        pad = 0.0
+        for pn in pad_notes:
+            pad += math.sin(two_pi * pn * t)
+        pad *= 0.03
+        trem = 0.85 + 0.15 * math.sin(two_pi * lfo_hz * t)
+        buf[i] = (melody + pad) * trem
+
+    # --- one-pole low-pass: warm, removes any harshness ---
+    y = 0.0
+    for i in range(total):
+        y += 0.20 * (buf[i] - y)
+        buf[i] = y
+
+    # --- light reverb: two feedback combs mixed back in for space ---
+    def _comb(src, delay_ms, decay):
+        d = int(sample_rate * delay_ms / 1000.0)
+        out = list(src)
+        for j in range(d, len(src)):
+            out[j] += out[j - d] * decay
+        return out
+    wet = _comb(buf, 47, 0.30)
+    wet = _comb(wet, 73, 0.24)
+    for i in range(total):
+        buf[i] = buf[i] * 0.72 + wet[i] * 0.28
+
+    # --- normalize, global fade in/out, write 16-bit mono ---
+    fade = int(1.5 * sample_rate)
+    peak = max(1e-6, max(abs(v) for v in buf))
+    norm = 0.85 / peak
+    samples = array("h")
+    for i in range(total):
+        v = buf[i] * norm
         if i < fade:
-            val *= i / fade
+            v *= i / fade
         elif i > total - fade:
-            val *= max(0.0, (total - i) / fade)
-        if val > 1.0:
-            val = 1.0
-        elif val < -1.0:
-            val = -1.0
-        samples.append(int(val * 32767 * 0.9))
+            v *= max(0.0, (total - i) / fade)
+        if v > 1.0:
+            v = 1.0
+        elif v < -1.0:
+            v = -1.0
+        samples.append(int(v * 32767))
 
     with wave.open(path, "w") as w:
         w.setnchannels(1)
