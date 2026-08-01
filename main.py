@@ -918,6 +918,40 @@ def get_movie():
             except Exception as e:
                 log_message(f"Top-rated ({cinema}) failed: {e}", level="WARNING")
 
+        # Source: world-cinema masterpieces — occasionally surface an unmissable
+        # non-English classic (Korean, Japanese, French, etc.). These are TMDB's
+        # highest-rated films per language and get the same cross-validation later.
+        WORLD_CINEMA = [
+            ("ko", "Korean"), ("ja", "Japanese"), ("fr", "French"),
+            ("es", "Spanish"), ("it", "Italian"), ("zh", "Chinese"),
+            ("de", "German"), ("fa", "Persian"),
+        ]
+        for wlang, wcinema in WORLD_CINEMA:
+            try:
+                r = requests.get(
+                    f"{TMDB_BASE_URL}/discover/movie",
+                    params={
+                        "api_key": TMDB_API_KEY, "with_original_language": wlang,
+                        "vote_average.gte": 7.8, "vote_count.gte": 800,
+                        "sort_by": "vote_average.desc", "language": "en-US",
+                        "include_adult": False, "page": 1,
+                    },
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    added = 0
+                    for m in r.json().get("results", [])[:8]:
+                        yr = int((m.get("release_date") or "0")[:4] or 0)
+                        m["_era"] = "classic" if yr < 1995 else ("modern" if yr < 2016 else "recent")
+                        m["_cinema_type"] = wcinema
+                        m["_language"] = wlang
+                        m["_world_cinema"] = True
+                        all_movies.append(m)
+                        added += 1
+                    log_message(f"  World cinema ({wcinema}): +{added}")
+            except Exception as e:
+                log_message(f"World cinema ({wcinema}) failed: {e}", level="WARNING")
+
         # Source: Groq LLM → TMDB search (AI-curated suggestions by genre + era)
         if GROQ_API_KEY:
             try:
@@ -1014,6 +1048,7 @@ def get_movie():
         unposted_priority = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in PRIORITY_TYPES]
         unposted_other_south = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") in OTHER_SOUTH]
         unposted_hollywood = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_cinema_type") == "Hollywood"]
+        unposted_world = [m for m in unique_movies if m["id"] not in posted_ids and m.get("_world_cinema")]
 
         log_message(f"Unposted pool: {len(unposted_priority)} Tollywood+Bollywood, {len(unposted_other_south)} other South, {len(unposted_hollywood)} Hollywood")
 
@@ -1055,16 +1090,20 @@ def get_movie():
                     return m
             return best or local_ok[0]
 
-        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias within each)
+        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias within each).
+        # But ~1 in 8 days, feature an unmissable world-cinema masterpiece instead.
         roll = random.random()
-        if unposted_priority and roll < 0.70:
+        if unposted_world and random.random() < 0.15:
+            primary = unposted_world
+            log_message("World-cinema day — featuring an unmissable global masterpiece")
+        elif unposted_priority and roll < 0.70:
             primary = unposted_priority
         elif unposted_other_south and roll < 0.85:
             primary = unposted_other_south
         elif unposted_hollywood:
             primary = unposted_hollywood
         else:
-            primary = unposted_priority or unposted_other_south or unposted_hollywood
+            primary = unposted_priority or unposted_other_south or unposted_hollywood or unposted_world
 
         if not primary:
             log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
@@ -1072,7 +1111,7 @@ def get_movie():
 
         # Rank candidates: primary pool first, then the other pools as fallback
         candidates = _ordered_candidates(primary, 6)
-        for extra in (unposted_priority, unposted_other_south, unposted_hollywood):
+        for extra in (unposted_priority, unposted_other_south, unposted_hollywood, unposted_world):
             if extra is not primary and extra:
                 candidates += _ordered_candidates(extra, 2)
         seen_c, ordered = set(), []
@@ -1094,6 +1133,14 @@ def get_movie():
             "te": "Telugu",
             "ml": "Malayalam",
             "kn": "Kannada",
+            "ko": "Korean",
+            "ja": "Japanese",
+            "fr": "French",
+            "es": "Spanish",
+            "it": "Italian",
+            "zh": "Chinese",
+            "de": "German",
+            "fa": "Persian",
         }.get(lang, "Hollywood")
 
         # Attach genre name for downstream hashtag generation
