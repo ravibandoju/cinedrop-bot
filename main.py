@@ -2205,15 +2205,15 @@ def create_story_card(feed_card_path, movie, post_type, post_permalink=None,
 
 def create_card(movie, streaming_platforms):
     """
-    Dispatch to one of four card styles based on day of week.
-    B2 Mon/Sat — dialogue poster
-    B3 Tue/Fri — cinedrop score
-    D1 Wed/Sun — mood line minimal
-    D2 Thu     — quote + colored bar
+    Dispatch to one of four card styles, chosen at random each post for variety.
+    b2 — dialogue poster
+    b3 — cinedrop score
+    d1 — mood line minimal
+    d2 — quote + colored bar
     """
     try:
-        style = CARD_STYLE_BY_DAY.get(datetime.utcnow().weekday(), "b2")
-        log_message(f"Card style: {style}")
+        style = random.choice(["b2", "b3", "d1", "d2"])
+        log_message(f"Card style: {style} (random)")
 
         if not movie.get("poster_path"):
             log_message("No poster path — skipping card", level="WARNING")
