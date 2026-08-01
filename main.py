@@ -2065,11 +2065,13 @@ def create_story_card(feed_card_path, movie, post_type, post_permalink=None,
             fill=COLOR_SAFFRON
         )
 
-        # CTA lines — default guides Story viewers to the feed post; reels override this
+        # CTA lines — default guides Story viewers to the feed post; reels override this.
+        # The account header at the very top of a Story is the only natively tappable
+        # element (API link stickers are unreliable), so point viewers there.
         if cta_lines is None:
             cta_lines = [
-                "full post in our feed 👆",
-                "@cinedrop.01"
+                "tap @cinedrop.01 above ↑",
+                "SEE THE FULL POST"
             ]
 
         cta_y = STORY_HEIGHT - 220
