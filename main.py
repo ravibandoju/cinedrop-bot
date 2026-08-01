@@ -2679,12 +2679,24 @@ def publish_to_story(image_url, post_permalink=None):
         # Step 1: Create story media container
         container_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media"
         link_url = post_permalink or "https://www.instagram.com/cinedrop.01/"
+        # NOTE: Meta's public Content Publishing API does NOT officially document
+        # link stickers on STORIES — the bare {"link": ...} form is silently dropped.
+        # The fuller form below (link_title + normalized x/y/width/height/rotation) is
+        # the community-reported shape that IG sometimes honors. Positions are 0..1.
+        link_sticker = {
+            "link": link_url,
+            "link_title": "See the full post",
+            "x": 0.5,
+            "y": 0.82,
+            "width": 0.7,
+            "height": 0.12,
+            "rotation": 0.0,
+        }
         container_payload = {
             "image_url": image_url,
             "media_type": "STORIES",
             "access_token": INSTAGRAM_ACCESS_TOKEN,
-            # Instagram Graph API: sticker_data with link_sticker.link for tappable URL
-            "sticker_data": json.dumps({"link_sticker": {"link": link_url}}),
+            "sticker_data": json.dumps({"link_sticker": link_sticker}),
         }
         log_message(f"Story link sticker URL: {link_url}")
 
@@ -2693,8 +2705,23 @@ def publish_to_story(image_url, post_permalink=None):
             data=container_payload,
             timeout=15
         )
-        container_resp.raise_for_status()
         container_data = container_resp.json()
+        if container_resp.status_code >= 400:
+            # If IG rejects the sticker payload, retry once without it so the
+            # story still posts (link just won't be tappable — API limitation).
+            log_message(
+                f"Story container rejected sticker_data ({container_resp.status_code}): "
+                f"{container_data} — retrying without link sticker",
+                level="WARNING",
+            )
+            fallback_payload = {
+                "image_url": image_url,
+                "media_type": "STORIES",
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            }
+            container_resp = requests.post(container_url, data=fallback_payload, timeout=15)
+            container_resp.raise_for_status()
+            container_data = container_resp.json()
 
         if not container_data.get("id"):
             log_message(f"Story container creation failed: {container_data}", level="WARNING")
