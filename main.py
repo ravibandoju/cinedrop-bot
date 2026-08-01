@@ -1337,6 +1337,16 @@ def _load_fonts():
         d = ImageFont.load_default()
         return {k: d for k in ["title","large","medium","body","small","tiny"]}
 
+def _cover_resize(img, w, h):
+    """Scale img to cover w×h preserving aspect ratio, then center-crop."""
+    iw, ih = img.size
+    scale = max(w / iw, h / ih)
+    nw, nh = int(iw * scale), int(ih * scale)
+    img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    left = (nw - w) // 2
+    top  = (nh - h) // 2
+    return img.crop((left, top, left + w, top + h))
+
 def _download_poster(poster_path, size="w780"):
     """Download poster image from TMDb."""
     url = f"https://image.tmdb.org/t/p/{size}{poster_path}"
@@ -1482,9 +1492,8 @@ def render_b2(movie, streaming_platforms):
     rating = round(movie.get("vote_average", 0), 1)
     title  = movie.get("title", "Unknown")
 
-    # Background — poster scaled, blurred, darkened
-    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
-    bg = bg.filter(ImageFilter.GaussianBlur(radius=0))  # no blur — keep poster sharp
+    # Background — cover-fit so aspect ratio is preserved, then darkened
+    bg = _cover_resize(poster_img.copy(), CARD_WIDTH, CARD_HEIGHT)
     dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0,0,0))
     card = Image.blend(bg, dark, alpha=0.45)
     
@@ -1587,8 +1596,7 @@ def render_b3(movie, streaming_platforms):
     rating  = round(movie.get("vote_average", 0), 1)
     title   = movie.get("title", "Unknown")
 
-    # Background
-    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    bg = _cover_resize(poster_img.copy(), CARD_WIDTH, CARD_HEIGHT)
     dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0,0,0))
     card = Image.blend(bg, dark, alpha=0.4)
     
@@ -1710,8 +1718,7 @@ def render_d1(movie, streaming_platforms):
     title  = movie.get("title", "Unknown")
     mood   = movie.get("_mood", "watch alone, lights off")
 
-    # Full poster background — scaled to fill, darkened (same pipeline as b2/b3)
-    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    bg = _cover_resize(poster_img.copy(), CARD_WIDTH, CARD_HEIGHT)
     dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
     card = Image.blend(bg, dark, alpha=0.40)
 
@@ -1792,8 +1799,7 @@ def render_d2(movie, streaming_platforms):
     title    = movie.get("title", "Unknown")
     dialogue = movie.get("_dialogue", "Some stories stay with you forever.")
 
-    # Blurred poster background gives editorial / depth-of-field feel
-    bg = poster_img.copy().resize((CARD_WIDTH, CARD_HEIGHT), Image.Resampling.LANCZOS)
+    bg = _cover_resize(poster_img.copy(), CARD_WIDTH, CARD_HEIGHT)
     bg = bg.filter(ImageFilter.GaussianBlur(radius=12))
     dark = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), (0, 0, 0))
     card = Image.blend(bg, dark, alpha=0.62)
