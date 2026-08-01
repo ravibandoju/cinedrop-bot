@@ -666,6 +666,78 @@ def generate_hashtags(movie, post_type):
 # STEP 1: FETCH MOVIE FROM TMDB
 # ============================================================================
 
+# Sources trusted enough that a mention there means the film is real + widely covered.
+TRUSTED_MOVIE_DOMAINS = (
+    "imdb.com", "rottentomatoes.com", "letterboxd.com", "wikipedia.org",
+    "metacritic.com", "rogerebert.com", "variety.com", "hollywoodreporter.com",
+    "timesofindia.indiatimes.com", "hindustantimes.com", "indianexpress.com",
+    "bollywoodhungama.com", "filmcompanion.in", "123telugu.com", "pinkvilla.com",
+    "thehindu.com", "ndtv.com", "firstpost.com", "gulte.com", "greatandhra.com",
+    "cinemaexpress.com", "ottplay.com", "moviezwap.com",
+)
+
+
+def _validate_movie_local(movie):
+    """
+    Local quality gate — cheap checks before spending a web search.
+    Returns (ok: bool, reason: str).
+    """
+    title = (movie.get("title") or "").strip()
+    if not title:
+        return False, "no title"
+    if not movie.get("poster_path"):
+        return False, "no poster"
+    if len((movie.get("overview") or "").strip()) < 40:
+        return False, "thin overview"
+    if movie.get("vote_average", 0) < 6.5:
+        return False, "low rating"
+    if movie.get("adult"):
+        return False, "adult"
+    # Regional films legitimately have fewer votes than Hollywood — scale the floor
+    lang = movie.get("original_language", "en")
+    min_votes = 40 if lang in {"te", "ta", "ml", "kn", "hi"} else 150
+    if movie.get("vote_count", 0) < min_votes:
+        return False, "too few votes"
+    return True, "ok"
+
+
+def _validate_movie_online(title, year):
+    """
+    Cross-check a film across multiple trusted sources via web + news search.
+    Returns an engagement score: distinct trusted domains mentioning it, plus a
+    bonus for recent news buzz. Returns -1 if search is unavailable (don't penalise).
+    """
+    try:
+        from duckduckgo_search import DDGS
+    except Exception:
+        return -1
+    domains_hit = set()
+    buzz = 0
+    queries = [
+        f'"{title}" {year} movie review',
+        f'"{title}" film',
+    ]
+    try:
+        with DDGS() as ddgs:
+            for q in queries:
+                try:
+                    for r in ddgs.text(q, max_results=8):
+                        href = (r.get("href") or r.get("url") or "").lower()
+                        for d in TRUSTED_MOVIE_DOMAINS:
+                            if d in href:
+                                domains_hit.add(d)
+                except Exception:
+                    pass
+            try:
+                for _ in ddgs.news(f"{title} movie", max_results=6, timelimit="m"):
+                    buzz += 1
+            except Exception:
+                pass
+    except Exception:
+        return -1
+    return len(domains_hit) + min(buzz, 3)
+
+
 def get_movie():
     """
     CHANGE 1: Fetch high-quality movies across 3 eras × 2 language groups (6 total API calls).
@@ -945,23 +1017,74 @@ def get_movie():
 
         log_message(f"Unposted pool: {len(unposted_priority)} Tollywood+Bollywood, {len(unposted_other_south)} other South, {len(unposted_hollywood)} Hollywood")
 
-        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias applied within each pool)
+        def _ordered_candidates(pool, n):
+            """Draw up to n distinct films from a pool using the era bias."""
+            pool = list(pool)
+            picks = []
+            while pool and len(picks) < n:
+                m = _pick_era_biased(pool)
+                picks.append(m)
+                pool = [x for x in pool if x["id"] != m["id"]]
+            return picks
+
+        def _select_validated_movie(cands):
+            """Local quality gate, then internet cross-validation; pick the most engaging."""
+            local_ok = []
+            for m in cands:
+                ok, reason = _validate_movie_local(m)
+                if ok:
+                    local_ok.append(m)
+                else:
+                    log_message(f"  ✗ rejected {m.get('title')}: {reason}")
+            if not local_ok:
+                return None
+            best, best_score, checked = None, -999, 0
+            for m in local_ok:
+                if checked >= 5:
+                    break
+                checked += 1
+                yr = (m.get("release_date") or "")[:4]
+                score = _validate_movie_online(m.get("title", ""), yr)
+                log_message(f"  online-check {m.get('title')} ({yr}) → score={score}")
+                if score == -1:            # search unavailable — accept, don't block posting
+                    return m
+                if score > best_score:
+                    best, best_score = m, score
+                if score >= 2:             # covered by 2+ trusted sources = engaging enough
+                    log_message(f"  ✓ validated {m.get('title')} across trusted sources")
+                    return m
+            return best or local_ok[0]
+
+        # 70% Tollywood/Bollywood, 15% other South, 15% Hollywood (era bias within each)
         roll = random.random()
         if unposted_priority and roll < 0.70:
-            movie = _pick_era_biased(unposted_priority)
+            primary = unposted_priority
         elif unposted_other_south and roll < 0.85:
-            movie = _pick_era_biased(unposted_other_south)
+            primary = unposted_other_south
         elif unposted_hollywood:
-            movie = _pick_era_biased(unposted_hollywood)
-        elif unposted_priority:
-            movie = _pick_era_biased(unposted_priority)
-        elif unposted_other_south:
-            movie = _pick_era_biased(unposted_other_south)
+            primary = unposted_hollywood
         else:
-            movie = None
+            primary = unposted_priority or unposted_other_south or unposted_hollywood
+
+        if not primary:
+            log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
+            return None
+
+        # Rank candidates: primary pool first, then the other pools as fallback
+        candidates = _ordered_candidates(primary, 6)
+        for extra in (unposted_priority, unposted_other_south, unposted_hollywood):
+            if extra is not primary and extra:
+                candidates += _ordered_candidates(extra, 2)
+        seen_c, ordered = set(), []
+        for m in candidates:
+            if m["id"] not in seen_c:
+                seen_c.add(m["id"])
+                ordered.append(m)
+
+        movie = _select_validated_movie(ordered)
 
         if not movie:
-            log_message(f"All {today_genre['name']} movies already posted", level="WARNING")
+            log_message(f"No engaging validated movie for {today_genre['name']}", level="WARNING")
             return None
 
         lang = movie.get("original_language", "en")
@@ -2294,8 +2417,9 @@ def create_reel_video(image_path, duration=8):
     Reels get far more reach than static images, so the daily post tries this first.
     Requires ffmpeg (preinstalled on GitHub Actions runners). If ffmpeg is missing
     or encoding fails, returns None so the caller falls back to a static image post.
-    Audio: uses assets/reel_audio.mp3 if present, otherwise synthesizes a soft
-    royalty-free ambient chord pad with ffmpeg (open source, no API, no copyright).
+    Audio: if any music files exist in assets/ (*.mp3/*.m4a/*.wav) one is picked at
+    random. Otherwise ffmpeg synthesizes a soft, calm two-note pad (open source, no
+    API, no copyright). Drop a few calm tracks in assets/ and the bot rotates them.
     """
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -2312,35 +2436,44 @@ def create_reel_video(image_path, duration=8):
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
             f"s=1080x1920:fps={fps},format=yuv420p"
         )
-        audio_path = ASSETS_DIR / "reel_audio.mp3"
         cmd = [ffmpeg, "-y", "-i", image_path]
         audio_filter = None
 
-        if audio_path.exists():
-            # Bundled track takes priority if the user ever adds one
-            cmd += ["-i", str(audio_path)]
-            audio_src = "file"
+        # Prefer real calm tracks bundled in assets/ (rotated at random)
+        music_files = []
+        if ASSETS_DIR.exists():
+            for ext in ("*.mp3", "*.m4a", "*.wav"):
+                music_files.extend(sorted(ASSETS_DIR.glob(ext)))
+        # Ignore any legacy placeholder name that isn't real music
+        music_files = [m for m in music_files if m.name != "reel_audio.mp3" or m.stat().st_size > 1024]
+
+        if music_files:
+            track = random.choice(music_files)
+            cmd += ["-i", str(track)]
+            # gentle fade-out so it never cuts abruptly
+            audio_filter = f"afade=t=in:st=0:d=1,afade=t=out:st={duration - 1.5}:d=1.5,volume=0.9"
+            audio_src = f"file:{track.name}"
         else:
-            # Synthesize a soft ambient chord pad — 100% ffmpeg, no API, no licensing.
-            # Rotate the chord by weekday so daily Reels don't all sound identical.
-            chords = [
-                (130.81, 164.81, 196.00),  # C major
-                (110.00, 130.81, 164.81),  # A minor
-                (146.83, 185.00, 220.00),  # D major
-                (98.00,  123.47, 146.83),  # G major
-                (123.47, 155.56, 185.00),  # B minor colour
-                (116.54, 146.83, 174.61),  # Bb major
-                (164.81, 196.00, 246.94),  # E minor colour
+            # Calm, minimal fallback: a soft sustained two-note pad (root + fifth).
+            # Rotate the note pair by weekday so daily Reels aren't identical.
+            pairs = [
+                (98.00,  146.83),  # G2 + D3
+                (110.00, 164.81),  # A2 + E3
+                (130.81, 196.00),  # C3 + G3
+                (146.83, 220.00),  # D3 + A3
+                (123.47, 185.00),  # B2 + F#3
+                (116.54, 174.61),  # Bb2 + F3
+                (87.31,  130.81),  # F2 + C3
             ]
-            f1, f2, f3 = chords[datetime.utcnow().weekday() % len(chords)]
-            expr = (f"0.13*sin(2*PI*{f1}*t)+0.12*sin(2*PI*{f2}*t)"
-                    f"+0.10*sin(2*PI*{f3}*t)+0.05*sin(2*PI*{f1 * 2}*t)")
+            root, fifth = pairs[datetime.utcnow().weekday() % len(pairs)]
+            expr = f"0.16*sin(2*PI*{root}*t)+0.10*sin(2*PI*{fifth}*t)"
             cmd += ["-f", "lavfi", "-i", f"aevalsrc=exprs={expr}:d={duration}:s=44100"]
+            # heavy low-pass keeps it warm and calm; slow fades; low background volume
             audio_filter = (
-                f"tremolo=f=0.2:d=0.5,lowpass=f=1500,aecho=0.8:0.88:70:0.25,"
-                f"afade=t=in:st=0:d=1.5,afade=t=out:st={duration - 1.5}:d=1.5,volume=1.3"
+                f"lowpass=f=700,tremolo=f=0.1:d=0.2,"
+                f"afade=t=in:st=0:d=2,afade=t=out:st={duration - 2}:d=2,volume=0.6"
             )
-            audio_src = "synth"
+            audio_src = "synth-calm"
 
         cmd += ["-vf", vf, "-t", str(duration), "-r", str(fps),
                 "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
