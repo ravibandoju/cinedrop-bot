@@ -2427,6 +2427,70 @@ def publish_reel_to_instagram(video_url, caption):
         return None
 
 
+def publish_carousel_to_instagram(image_urls, caption):
+    """
+    Publish a carousel (2–10 images). Creates a child container per image, then a
+    parent CAROUSEL container, then publishes. Returns the post ID, or None so the
+    caller can fall back to a single-image post.
+    """
+    if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_ACCOUNT_ID:
+        return None
+    urls = image_urls[:10]
+    if len(urls) < 2:
+        return None
+    try:
+        log_message(f"Publishing carousel ({len(urls)} slides)...")
+        media_url = f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media"
+
+        child_ids = []
+        for u in urls:
+            r = requests.post(media_url, data={
+                "image_url": u,
+                "is_carousel_item": "true",
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            }, timeout=30)
+            r.raise_for_status()
+            cid = r.json().get("id")
+            if cid:
+                child_ids.append(cid)
+            else:
+                log_message(f"Carousel child failed: {r.json()}", level="WARNING")
+        if len(child_ids) < 2:
+            log_message("Not enough carousel children created", level="ERROR")
+            return None
+
+        time.sleep(5)  # let child containers finish
+        parent = requests.post(media_url, data={
+            "media_type": "CAROUSEL",
+            "children": ",".join(child_ids),
+            "caption": caption,
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+        }, timeout=30)
+        parent.raise_for_status()
+        parent_id = parent.json().get("id")
+        if not parent_id:
+            log_message(f"Carousel container failed: {parent.json()}", level="ERROR")
+            return None
+
+        time.sleep(5)
+        pub = requests.post(
+            f"{INSTAGRAM_GRAPH_BASE_URL}/{INSTAGRAM_ACCOUNT_ID}/media_publish",
+            data={"creation_id": parent_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=30,
+        )
+        pub.raise_for_status()
+        post_id = pub.json().get("id")
+        if post_id:
+            log_message(f"Carousel published! Post ID: {post_id}")
+        return post_id
+    except requests.RequestException as e:
+        log_message(f"Carousel publish error: {e}", level="ERROR")
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            log_message(f"Carousel API response: {resp.text}", level="ERROR")
+        return None
+
+
 def post_first_comment(post_id, comment_text):
     """Post hashtags as the first comment to keep the caption clean."""
     if not INSTAGRAM_ACCESS_TOKEN or not post_id or not comment_text.strip():
@@ -3191,6 +3255,142 @@ def render_ott_list_card(films):
     return str(path)
 
 
+def render_ott_carousel_slides(films):
+    """
+    Build a swipeable carousel for the weekly OTT post: a cover slide plus one
+    poster slide per film. Carousels re-surface on every swipe and earn more saves
+    than a single dense card, which lifts reach. Returns a list of image paths.
+    """
+    fonts = _load_fonts()
+    W, H = 1080, 1350
+    ORANGE = COLOR_SAFFRON
+    PLATFORM_COLORS = {
+        "Netflix": (229, 9, 20), "Prime Video": (0, 168, 224), "JioHotstar": (108, 63, 194),
+        "Zee5": (230, 65, 115), "JioCinema": (255, 103, 0), "SonyLIV": (0, 120, 215),
+        "Apple TV+": (240, 240, 240), "Aha": (34, 197, 94), "Lionsgate Play": (230, 50, 50),
+        "Mubi": (255, 103, 0),
+    }
+    langs = {"hi": "Bollywood", "ta": "Tamil", "te": "Telugu",
+             "ml": "Malayalam", "kn": "Kannada", "ko": "Korean"}
+    CARDS_DIR.mkdir(exist_ok=True)
+    films = films[:9]   # cover + 9 films = 10 slides (Instagram carousel max)
+    total = len(films)
+    slides = []
+
+    def _poster(path, size="w500"):
+        if not path:
+            return None
+        try:
+            return _download_poster(path, size)
+        except Exception:
+            return None
+
+    # ---- Cover slide ----
+    cover = Image.new("RGB", (W, H), (18, 20, 30))
+    cd = ImageDraw.Draw(cover)
+    cd.rectangle([(0, 0), (W, 10)], fill=ORANGE)
+    for _ in range(500):
+        nx, ny = random.randint(0, W), random.randint(0, H)
+        v = random.randint(30, 46)
+        cd.point((nx, ny), fill=(v, v, v + 8))
+    for text, y, font, col in [
+        ("OTT RELEASES", 360, fonts["title"], (245, 245, 250)),
+        ("THIS WEEK", 480, fonts["title"], ORANGE),
+        (f"{total} new drops for your watchlist", 630, fonts["small"], (160, 165, 190)),
+        ("swipe →", 780, fonts["medium"], (220, 222, 235)),
+    ]:
+        bb = cd.textbbox((0, 0), text, font=font)
+        cd.text(((W - (bb[2] - bb[0])) // 2, y), text, font=font, fill=col)
+    cd.rectangle([(0, H - 70), (W, H)], fill=ORANGE)
+    cd.text((54, H - 52), "@cinedrop", font=fonts["medium"], fill=(255, 255, 255))
+    st = "save this"
+    bb = cd.textbbox((0, 0), st, font=fonts["small"])
+    cd.text((W - (bb[2] - bb[0]) - 54, H - 48), st, font=fonts["small"], fill=(255, 255, 255))
+    p0 = CARDS_DIR / "ott_carousel_00.jpg"
+    cover.save(str(p0), "JPEG", quality=92)
+    slides.append(str(p0))
+
+    # ---- One slide per film ----
+    for i, film in enumerate(films, 1):
+        title = film.get("title", "Unknown")
+        year = (film.get("release_date") or "")[:4]
+        lang_label = langs.get(film.get("original_language", "en"), "Hollywood")
+        platforms = film.get("_platforms", [])
+        pimg = _poster(film.get("poster_path"))
+
+        if pimg:
+            bg = _cover_resize(pimg.copy(), W, H).filter(ImageFilter.GaussianBlur(40))
+            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.58)
+        else:
+            bg = Image.new("RGB", (W, H), (20, 22, 32))
+        card = bg.convert("RGB")
+        d = ImageDraw.Draw(card)
+        d.rectangle([(0, 0), (W, 10)], fill=ORANGE)
+
+        # Poster thumbnail
+        if pimg:
+            tw = 520
+            th = int(pimg.height * (tw / pimg.width))
+            thumb = pimg.resize((tw, th), Image.Resampling.LANCZOS)
+            px, py = (W - tw) // 2, 150
+            d.rectangle([(px - 4, py - 4), (px + tw + 4, py + th + 4)], outline=(255, 255, 255), width=3)
+            card.paste(thumb, (px, py))
+            content_y = py + th + 40
+        else:
+            content_y = 430
+
+        # Index badge (top-right)
+        badge = f"{i}/{total}"
+        bb = d.textbbox((0, 0), badge, font=fonts["small"])
+        bw = bb[2] - bb[0] + 28
+        d.rounded_rectangle([(W - bw - 40, 44), (W - 40, 96)], radius=16, fill=(0, 0, 0))
+        d.text((W - bw - 40 + 14, 54), badge, font=fonts["small"], fill=ORANGE)
+
+        # Title (wrapped, centered)
+        tlines = _wrap_text(d, title.upper(), fonts["large"], W - 120)[:2]
+        for li, line in enumerate(tlines):
+            bb = d.textbbox((0, 0), line, font=fonts["large"])
+            d.text(((W - (bb[2] - bb[0])) // 2, content_y + li * 70), line,
+                   font=fonts["large"], fill=(240, 242, 250))
+        meta_y = content_y + len(tlines) * 70 + 18
+
+        # Meta line
+        meta = f"{year}  ·  {lang_label}"
+        bb = d.textbbox((0, 0), meta, font=fonts["small"])
+        d.text(((W - (bb[2] - bb[0])) // 2, meta_y), meta, font=fonts["small"], fill=(170, 175, 200))
+
+        # Platform pills (centered)
+        pills = []
+        for plat in platforms:
+            short = plat.replace("Lionsgate Play", "Lionsgate")
+            pb = d.textbbox((0, 0), short, font=fonts["tiny"])
+            pills.append((short, plat, pb[2] - pb[0] + 28))
+        if pills:
+            pill_y = meta_y + 58
+            total_pw = sum(p[2] for p in pills) + 14 * (len(pills) - 1)
+            pill_x = (W - total_pw) // 2
+            for short, plat, pw in pills:
+                pc = PLATFORM_COLORS.get(plat, (100, 100, 120))
+                d.rounded_rectangle([(pill_x, pill_y), (pill_x + pw, pill_y + 46)], radius=12, fill=pc)
+                d.text((pill_x + 14, pill_y + 9), short, font=fonts["tiny"],
+                       fill=(0, 0, 0) if plat == "Apple TV+" else (255, 255, 255))
+                pill_x += pw + 14
+
+        # Footer
+        d.rectangle([(0, H - 64), (W, H)], fill=(0, 0, 0))
+        d.text((54, H - 50), "@cinedrop", font=fonts["small"], fill=(255, 255, 255))
+        foot = "swipe →" if i < total else "save & share"
+        bb = d.textbbox((0, 0), foot, font=fonts["small"])
+        d.text((W - (bb[2] - bb[0]) - 54, H - 50), foot, font=fonts["small"], fill=ORANGE)
+
+        p = CARDS_DIR / f"ott_carousel_{i:02d}.jpg"
+        card.convert("RGB").save(str(p), "JPEG", quality=92)
+        slides.append(str(p))
+
+    log_message(f"OTT carousel: {len(slides)} slides rendered")
+    return slides
+
+
 def generate_ott_caption(films):
     """Description with movie names + hashtags for reach."""
     lines = ["🎬 OTT Releases This Week\n"]
@@ -3232,9 +3432,7 @@ def generate_ott_caption(films):
                 seen_plat_tags.add(pt)
 
     base_tags = (
-        "#cinedrop #newonott #ottrelease #ottindia #weekendwatch "
-        "#streamingwatch #ottwatch #weekendwatchlist #bingelist #cinephile "
-        "#indiefilms #worldcinema #newmovies2025 #mustwatch #moviestowatch"
+        "#cinedrop #newonott #ottindia #weekendwatch #ottrelease #moviestowatch"
     )
     dynamic = " ".join(sorted(seen_lang_tags) + sorted(seen_plat_tags))
     tags = (base_tags + " " + dynamic).strip()
@@ -3258,20 +3456,41 @@ def main_ott_list():
 
         log_message(f"Found {len(films)} new OTT releases for the list")
 
-        card_path = render_ott_list_card(films)
-        public_image_url = upload_card_for_instagram(card_path)
-        if not public_image_url:
-            log_message("Card upload failed. Exiting.", level="ERROR")
-            return
-
-        log_message("Waiting for GitHub CDN...")
-        time.sleep(20)
-
         caption = generate_ott_caption(films)
-
         title_list = " · ".join(f.get("title", "") for f in films[:6])
         alt_text = f"OTT releases this week: {title_list} — by @cinedrop"
-        post_id = publish_to_instagram(public_image_url, caption, alt_text=alt_text)
+
+        # Carousel-first: swipeable poster slides earn more saves and re-surface on
+        # every swipe, which lifts reach vs one dense card. Fall back to the single card.
+        post_id = None
+        card_path = None
+        try:
+            slides = render_ott_carousel_slides(films)
+            if slides and len(slides) >= 2:
+                slide_urls = []
+                for sp in slides:
+                    u = upload_card_for_instagram(sp)
+                    if u:
+                        slide_urls.append(u)
+                if len(slide_urls) >= 2:
+                    log_message("Waiting for GitHub CDN...")
+                    time.sleep(20)
+                    post_id = publish_carousel_to_instagram(slide_urls, caption)
+                    if post_id:
+                        card_path = slides[0]   # cover slide feeds the Story
+        except Exception as e:
+            log_message(f"Carousel flow failed: {e} — falling back to single card", level="WARNING")
+
+        # Fallback: single summary card
+        if not post_id:
+            card_path = render_ott_list_card(films)
+            public_image_url = upload_card_for_instagram(card_path)
+            if not public_image_url:
+                log_message("Card upload failed. Exiting.", level="ERROR")
+                return
+            log_message("Waiting for GitHub CDN...")
+            time.sleep(20)
+            post_id = publish_to_instagram(public_image_url, caption, alt_text=alt_text)
 
         # Short engagement hook as first comment (no hashtag repeat)
         post_first_comment(post_id, "save this — tag someone who needs a watch plan this weekend")
