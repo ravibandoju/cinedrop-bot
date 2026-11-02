@@ -32,6 +32,7 @@ load_dotenv()
 # API Keys from environment variables
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-2-70b-chat")  # Configurable model
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_ACCOUNT_ID = os.getenv("INSTAGRAM_ACCOUNT_ID")
 GH_TOKEN = os.getenv("GH_TOKEN")
@@ -1013,7 +1014,7 @@ def get_movie():
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
                     json={
-                        "model": "mixtral-8x7b-32768",
+                        "model": GROQ_MODEL,
                         "messages": [{"role": "user", "content": groq_prompt}],
                         "temperature": 0.7,
                         "max_tokens": 300,
@@ -1471,7 +1472,7 @@ JSON only. No markdown. No explanation.
 
         # Call Groq with system message
         message = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model=GROQ_MODEL,
             max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system_message},
@@ -2272,7 +2273,7 @@ Output the words only. Nothing else.
 HARD LIMIT: 3 words maximum. Not 4. Not a sentence. 3 words."""
         
         resp = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model=GROQ_MODEL,
             max_tokens=8,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -2384,7 +2385,7 @@ Rules:
 - Mix Hindi/Telugu/English if it hits harder for this particular film
 - Max 15 words. Just the line. No hashtags."""
             resp = client.chat.completions.create(
-                model="mixtral-8x7b-32768",
+                model=GROQ_MODEL,
                 max_tokens=50,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -3319,7 +3320,7 @@ def _search_ott_web() -> list[dict]:
     try:
         client = Groq(api_key=GROQ_API_KEY)
         resp = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model=GROQ_MODEL,
             max_tokens=1000,
             messages=[{"role": "user", "content": f"""You are looking at content from Indian OTT release listing pages and news snippets for the week of {week_label}.
 
